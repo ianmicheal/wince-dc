@@ -15,3 +15,5 @@ Thumbs.db
 reference/disc/
 reference/*.iso
 reference/*.cdi
+reference/disc-gdi/
+utils/ip.bin

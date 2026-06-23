@@ -1,7 +1,32 @@
-# Disc image — booting the from-source kernel in Flycast (CDI)
+# Disc image — booting the from-source kernel in Flycast
 
-Turns our wrapped `0winceos.bin` into a bootable Dreamcast **CDI** (Padus DiscJuggler)
-that Flycast/real HW can load. Driver: `toolchain\make-disc.ps1`.
+Turns our wrapped `0winceos.bin` into a bootable Dreamcast disc. **GDI is the recommended
+path** (`make-gdi.ps1`) because it reuses the *proven* Half-Life DC pipeline — and Half-Life
+DC is itself a Windows CE port, so its bootstrap + layout are exactly what a WinCE image needs.
+A CDI path (`make-disc.ps1`, mkisofs+cdi4dc) is also kept.
+
+## GDI (recommended) — the Half-Life DC pipeline
+HL-DC ships `utils\buildgdi.exe` (Sappharad's GDIBuilder), `utils\ip.bin` (its IP.BIN — bootfile
+field `0WINCEOS.BIN`, same as `ip_drago.bin`), and `utils\Half-Life.GDI` (track layout:
+`1 0 / 2 756 / 3 45000`). `buildgdi` makes the high-density **track03** = IP.BIN bootsector +
+ISO9660 with our `0WINCEOS.BIN`; we synthesize the low-density `track01.bin`/`track02.raw` filler.
+```
+powershell -File toolchain\make-gdi.ps1 -Image reference\0winceos.ours.bin
+```
+→ `reference\disc-gdi\disc.gdi` (+ track01/02/03). Load `disc.gdi` in Flycast.
+buildgdi call (from HL-DC's `postbuild_dc.bat`):
+```
+buildgdi.exe -data <dir-with-0WINCEOS.BIN> -ip ip.bin -output <out> -gdi Half-Life.GDI -V WINCE
+```
+(No `-truncate` — that emits a spurious end-of-disc track4; the standard shape is one full
+~1.18 GB high-density track3, mostly zero-pad.)
+
+> `utils\ip.bin` is Sega's copyrighted bootstrap — gitignored, not committed. `buildgdi.exe`
+> + `Half-Life.GDI` (free) are committed. The HL-DC source lives at `c:\dev\halflife_dc`.
+
+## CDI (alternative)
+Turns our wrapped `0winceos.bin` into a bootable Dreamcast **CDI** (Padus DiscJuggler).
+Driver: `toolchain\make-disc.ps1`.
 
 ## Boot model (from the SDK's own scripts)
 - `ip_drago.bin` (GD Workshop) is the WinCE **IP.BIN** — its bootfile field @0x60 is
