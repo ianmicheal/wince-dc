@@ -17,3 +17,6 @@ reference/*.iso
 reference/*.cdi
 reference/disc-gdi/
 utils/ip.bin
+
+# Microsoft cvdump (fetched, not vendored)
+vendor/sh-toolchain/bin/I386/cvdump.exe

@@ -1,0 +1,888 @@
+# CodeView struct layouts from nknodbg.pdb (PDB 2.00) via cvdump -t
+# offsets in bytes; type = primitive or referenced aggregate name
+
+=== _BY_HANDLE_FILE_INFORMATION  (size 56) ===
+  +0    ULONG                dwFileAttributes
+  +4    _FILETIME            ftCreationTime
+  +12   _FILETIME            ftLastAccessTime
+  +20   _FILETIME            ftLastWriteTime
+  +28   ULONG                dwVolumeSerialNumber
+  +32   ULONG                nFileSizeHigh
+  +36   ULONG                nFileSizeLow
+  +40   ULONG                nNumberOfLinks
+  +44   ULONG                nFileIndexHigh
+  +48   ULONG                nFileIndexLow
+  +52   ULONG                dwOID
+
+=== _CALLBACKINFO  (size 12) ===
+  +0    32PVOID              hProc
+  +4    0x1002               pfn
+  +8    32PVOID              pvArg0
+
+=== _CEDBASEINFO  (size 120) ===
+  +0    ULONG                dwFlags
+  +4    0x1195               szDbaseName
+  +68   ULONG                dwDbaseType
+  +72   USHORT               wNumRecords
+  +74   USHORT               wNumSortOrder
+  +76   ULONG                dwSize
+  +80   _FILETIME            ftLastModified
+  +88   0x13C2               rgSortSpecs
+
+=== _CEDIRINFO  (size 528) ===
+  +0    ULONG                dwAttributes
+  +4    ULONG                oidParent
+  +8    0x1095               szDirName
+
+=== _CEFILEINFO  (size 540) ===
+  +0    ULONG                dwAttributes
+  +4    ULONG                oidParent
+  +8    0x1095               szFileName
+  +528  _FILETIME            ftLastChanged
+  +536  ULONG                dwLength
+
+=== _CEGUID  (size 16) ===
+  +0    ULONG                Data1
+  +4    ULONG                Data2
+  +8    ULONG                Data3
+  +12   ULONG                Data4
+
+=== _CEOIDINFO  (size 544) ===
+  +0    USHORT               wObjType
+  +2    USHORT               wPad
+  +4    _CEFILEINFO          infFile
+  +4    _CEDIRINFO           infDirectory
+  +4    _CEDBASEINFO         infDatabase
+  +4    _CERECORDINFO        infRecord
+
+=== _CERECORDINFO  (size 4) ===
+  +0    ULONG                oidParent
+
+=== _CONTEXT  (size 228) ===
+  +0    ULONG                ContextFlags
+  +4    ULONG                PR
+  +8    ULONG                MACH
+  +12   ULONG                MACL
+  +16   ULONG                GBR
+  +20   ULONG                R0
+  +24   ULONG                R1
+  +28   ULONG                R2
+  +32   ULONG                R3
+  +36   ULONG                R4
+  +40   ULONG                R5
+  +44   ULONG                R6
+  +48   ULONG                R7
+  +52   ULONG                R8
+  +56   ULONG                R9
+  +60   ULONG                R10
+  +64   ULONG                R11
+  +68   ULONG                R12
+  +72   ULONG                R13
+  +76   ULONG                R14
+  +80   ULONG                R15
+  +84   ULONG                Fir
+  +88   ULONG                Psr
+  +92   ULONG                Fpscr
+  +96   ULONG                Fpul
+  +100  0x1115               FRegs
+  +164  0x1115               xFRegs
+
+=== _CREATE_PROCESS_DEBUG_INFO  (size 40) ===
+  +0    32PVOID              hFile
+  +4    32PVOID              hProcess
+  +8    32PVOID              hThread
+  +12   32PVOID              lpBaseOfImage
+  +16   ULONG                dwDebugInfoFileOffset
+  +20   ULONG                nDebugInfoSize
+  +24   32PVOID              lpThreadLocalBase
+  +28   0x1249               lpStartAddress
+  +32   32PVOID              lpImageName
+  +36   USHORT               fUnicode
+
+=== _CREATE_THREAD_DEBUG_INFO  (size 12) ===
+  +0    32PVOID              hThread
+  +4    32PVOID              lpThreadLocalBase
+  +8    0x1249               lpStartAddress
+
+=== _DBGPARAM  (size 1092) ===
+  +0    0x1195               lpszName
+  +64   0x137C               rglpszZones
+  +1088 ULONG                ulZoneMask
+
+=== _DEBUG_EVENT  (size 96) ===
+  +0    ULONG                dwDebugEventCode
+  +4    ULONG                dwProcessId
+  +8    ULONG                dwThreadId
+  +12   0x138B               u
+
+=== _DISPATCHER_CONTEXT  (size 16) ===
+  +0    ULONG                ControlPc
+  +4    0x1021               FunctionEntry
+  +8    ULONG                EstablisherFrame
+  +12   0x1023               ContextRecord
+
+=== _DList  (size 8) ===
+  +0    0x12E8               fwd
+  +4    0x12E8               back
+
+=== _EXCARGS  (size 16) ===
+  +0    ULONG                dwExceptionCode
+  +4    ULONG                dwExceptionFlags
+  +8    ULONG                cArguments
+  +12   32PULONG             lpArguments
+
+=== _EXCEPTION_DEBUG_INFO  (size 84) ===
+  +0    _EXCEPTION_RECORD    ExceptionRecord
+  +80   ULONG                dwFirstChance
+
+=== _EXCEPTION_POINTERS  (size 8) ===
+  +0    0x1110               ExceptionRecord
+  +4    0x1023               ContextRecord
+
+=== _EXCEPTION_RECORD  (size 80) ===
+  +0    ULONG                ExceptionCode
+  +4    ULONG                ExceptionFlags
+  +8    0x1110               ExceptionRecord
+  +12   32PVOID              ExceptionAddress
+  +16   ULONG                NumberParameters
+  +20   0x1313               ExceptionInformation
+
+=== _EXIT_PROCESS_DEBUG_INFO  (size 4) ===
+  +0    ULONG                dwExitCode
+
+=== _EXIT_THREAD_DEBUG_INFO  (size 4) ===
+  +0    ULONG                dwExitCode
+
+=== _FILETIME  (size 8) ===
+  +0    ULONG                dwLowDateTime
+  +4    ULONG                dwHighDateTime
+
+=== _HDATA  (size 32) ===
+  +0    _DList               linkage
+  +8    32PVOID              hValue
+  +12   ULONG                lock
+  +16   REFINFO              ref
+  +20   0x11E9               pci
+  +24   32PVOID              pvObj
+  +28   ULONG                dwInfo
+
+=== _IDB  (size 12) ===
+  +0    0x11F4               EnableFunc
+  +4    0x11F4               DisableFunc
+  +8    0x11F4               DoneFunc
+
+=== _KIDESCRIPTOR  (size 24) ===
+  +0    0x1340               pulStatusRegister
+  +4    0x1340               pulEnableRegister
+  +8    ULONG                ulAllEnableMask
+  +12   ULONG                ulNowEnableMask
+  +16   ULONG                ulActiveIntMask
+  +20   ULONG                ulIncludeMask
+
+=== _LOAD_DLL_DEBUG_INFO  (size 24) ===
+  +0    32PVOID              hFile
+  +4    32PVOID              lpBaseOfDll
+  +8    ULONG                dwDebugInfoFileOffset
+  +12   ULONG                nDebugInfoSize
+  +16   32PVOID              lpImageName
+  +20   USHORT               fUnicode
+
+=== _MDL  (size 24) ===
+  +0    0x1346               Next
+  +4    SHORT                MdlFlags
+  +8    32PVOID              MappedSystemVa
+  +12   32PVOID              StartVa
+  +16   ULONG                ByteCount
+  +20   ULONG                ByteOffset
+
+=== _MEMORY_BASIC_INFORMATION  (size 28) ===
+  +0    32PVOID              BaseAddress
+  +4    32PVOID              AllocationBase
+  +8    ULONG                AllocationProtect
+  +12   ULONG                RegionSize
+  +16   ULONG                State
+  +20   ULONG                Protect
+  +24   ULONG                Type
+
+=== _MEMORY_NODE  (size 12) ===
+  +0    0x1359               pNextNode
+  +4    ULONG                dwPhysicalStart
+  +8    ULONG                dwPhysicalSize
+
+=== _OUTPUT_DEBUG_STRING_INFO  (size 8) ===
+  +0    32PRCHAR             lpDebugStringData
+  +4    USHORT               fUnicode
+  +6    USHORT               nDebugStringLength
+
+=== _PLATFORMVERSION  (size 8) ===
+  +0    ULONG                Set
+  +4    ULONG                Revision
+
+=== _PROCESS_INFORMATION  (size 16) ===
+  +0    32PVOID              hProcess
+  +4    32PVOID              hThread
+  +8    ULONG                dwProcessId
+  +12   ULONG                dwThreadId
+
+=== _RIP_INFO  (size 8) ===
+  +0    ULONG                dwError
+  +4    ULONG                dwType
+
+=== _RUNTIME_FUNCTION  (size 20) ===
+  +0    ULONG                BeginAddress
+  +4    ULONG                EndAddress
+  +8    0x111C               ExceptionHandler
+  +12   32PVOID              HandlerData
+  +16   ULONG                PrologEndAddress
+
+=== _SECURITY_ATTRIBUTES  (size 12) ===
+  +0    ULONG                nLength
+  +4    32PVOID              lpSecurityDescriptor
+  +8    INT4                 bInheritHandle
+
+=== _SORTORDERSPEC  (size 8) ===
+  +0    ULONG                propid
+  +4    ULONG                dwFlags
+
+=== _STARTUPINFOW  (size 68) ===
+  +0    ULONG                cb
+  +4    32PUSHORT            lpReserved
+  +8    32PUSHORT            lpDesktop
+  +12   32PUSHORT            lpTitle
+  +16   ULONG                dwX
+  +20   ULONG                dwY
+  +24   ULONG                dwXSize
+  +28   ULONG                dwYSize
+  +32   ULONG                dwXCountChars
+  +36   ULONG                dwYCountChars
+  +40   ULONG                dwFillAttribute
+  +44   ULONG                dwFlags
+  +48   USHORT               wShowWindow
+  +50   USHORT               cbReserved2
+  +52   32PUCHAR             lpReserved2
+  +56   32PVOID              hStdInput
+  +60   32PVOID              hStdOutput
+  +64   32PVOID              hStdError
+
+=== _SYSTEM_INFO  (size 36) ===
+  +0    ULONG                dwOemId
+  +0    USHORT               wProcessorArchitecture
+  +2    USHORT               wReserved
+  +4    ULONG                dwPageSize
+  +8    32PVOID              lpMinimumApplicationAddress
+  +12   32PVOID              lpMaximumApplicationAddress
+  +16   ULONG                dwActiveProcessorMask
+  +20   ULONG                dwNumberOfProcessors
+  +24   ULONG                dwProcessorType
+  +28   ULONG                dwAllocationGranularity
+  +32   USHORT               wProcessorLevel
+  +34   USHORT               wProcessorRevision
+
+=== _SYSTEMTIME  (size 16) ===
+  +0    USHORT               wYear
+  +2    USHORT               wMonth
+  +4    USHORT               wDayOfWeek
+  +6    USHORT               wDay
+  +8    USHORT               wHour
+  +10   USHORT               wMinute
+  +12   USHORT               wSecond
+  +14   USHORT               wMilliseconds
+
+=== _UNLOAD_DLL_DEBUG_INFO  (size 4) ===
+  +0    32PVOID              lpBaseOfDll
+
+=== _WIN32_FIND_DATAW  (size 560) ===
+  +0    ULONG                dwFileAttributes
+  +4    _FILETIME            ftCreationTime
+  +12   _FILETIME            ftLastAccessTime
+  +20   _FILETIME            ftLastWriteTime
+  +28   ULONG                nFileSizeHigh
+  +32   ULONG                nFileSizeLow
+  +36   ULONG                dwOID
+  +40   0x1095               cFileName
+
+=== APISet  (size 24) ===
+  +0    cinfo                cinfo
+  +20   INT4                 iReg
+
+=== appinfo_t  (size 592) ===
+  +0    ULONG                index
+  +4    ULONG                done
+  +8    0x1195               depchain
+  +72   0x1095               appname
+
+=== CALLSTACK  (size 20) ===
+  +0    0x1114               pcstkNext
+  +4    0x11F4               retAddr
+  +8    0x1044               pprcLast
+  +12   ULONG                akyLast
+  +16   UINT4                extra
+
+=== cinfo  (size 20) ===
+  +0    0x1100               acName
+  +4    UCHAR                disp
+  +5    UCHAR                type
+  +6    USHORT               cMethods
+  +8    0x1102               ppfnMethods
+  +12   0x1104               pdwSig
+  +16   0x1044               pServer
+
+=== CLEANEVENT  (size 16) ===
+  +0    0x10F7               ceptr
+  +4    32PVOID              base
+  +8    ULONG                size
+  +12   ULONG                op
+
+=== CRIT  (size 100) ===
+  +0    0x1079               lpcs
+  +4    0x1373               proxfirst
+  +40   0x1373               proxlast
+  +76   USHORT               highest
+  +78   UCHAR                bListed
+  +79   UCHAR                iOwnerProc
+  +80   0x1211               pPrevOwned
+  +84   0x1211               pNextOwned
+  +88   0x1211               pSamePrioPrev
+  +92   0x1211               pSamePrioNext
+  +96   0x1211               pNext
+
+=== CRITICAL_SECTION  (size 20) ===
+  +0    UINT4                LockCount
+  +4    32PVOID              OwnerThread
+  +8    32PVOID              hCrit
+  +12   ULONG                needtrap
+  +16   ULONG                dwReserved
+
+=== e32_exe  (size 248) ===
+  +0    0x11B7               e32_magic
+  +4    USHORT               e32_cpu
+  +6    USHORT               e32_objcnt
+  +8    ULONG                e32_timestamp
+  +12   ULONG                e32_symtaboff
+  +16   ULONG                e32_symcount
+  +20   USHORT               e32_opthdrsize
+  +22   USHORT               e32_imageflags
+  +24   USHORT               e32_coffmagic
+  +26   UCHAR                e32_linkmajor
+  +27   UCHAR                e32_linkminor
+  +28   ULONG                e32_codesize
+  +32   ULONG                e32_initdsize
+  +36   ULONG                e32_uninitdsize
+  +40   ULONG                e32_entryrva
+  +44   ULONG                e32_codebase
+  +48   ULONG                e32_database
+  +52   ULONG                e32_vbase
+  +56   ULONG                e32_objalign
+  +60   ULONG                e32_filealign
+  +64   USHORT               e32_osmajor
+  +66   USHORT               e32_osminor
+  +68   USHORT               e32_usermajor
+  +70   USHORT               e32_userminor
+  +72   USHORT               e32_subsysmajor
+  +74   USHORT               e32_subsysminor
+  +76   ULONG                e32_res1
+  +80   ULONG                e32_vsize
+  +84   ULONG                e32_hdrsize
+  +88   ULONG                e32_filechksum
+  +92   USHORT               e32_subsys
+  +94   USHORT               e32_dllflags
+  +96   ULONG                e32_stackmax
+  +100  ULONG                e32_stackinit
+  +104  ULONG                e32_heapmax
+  +108  ULONG                e32_heapinit
+  +112  ULONG                e32_res2
+  +116  ULONG                e32_hdrextra
+  +120  0x11B8               e32_unit
+
+=== e32_lite  (size 64) ===
+  +0    USHORT               e32_objcnt
+  +2    UCHAR                e32_cevermajor
+  +3    UCHAR                e32_ceverminor
+  +4    ULONG                e32_stackmax
+  +8    ULONG                e32_vbase
+  +12   ULONG                e32_vsize
+  +16   0x1099               e32_unit
+
+=== EVENT  (size 84) ===
+  +0    32PVOID              hNext
+  +4    0x1373               proxfirst
+  +40   0x1373               proxlast
+  +76   USHORT               highest
+  +78   UCHAR                state
+  +79   UCHAR                manualreset
+  +80   0x1090               name
+
+=== ExcInfo  (size 20) ===
+  +0    ULONG                linkage
+  +4    ULONG                oldFir
+  +8    UINT4                oldMode
+  +12   UCHAR                exc
+  +13   UCHAR                lowSp
+  +14   0x1322               pad
+  +16   ULONG                info
+
+=== ExpHdr  (size 40) ===
+  +0    ULONG                exp_flags
+  +4    ULONG                exp_timestamp
+  +8    USHORT               exp_vermajor
+  +10   USHORT               exp_verminor
+  +12   ULONG                exp_dllname
+  +16   ULONG                exp_ordbase
+  +20   ULONG                exp_eatcnt
+  +24   ULONG                exp_namecnt
+  +28   ULONG                exp_eat
+  +32   ULONG                exp_name
+  +36   ULONG                exp_ordinal
+
+=== FreeInfo  (size 20) ===
+  +0    ULONG                paStart
+  +4    ULONG                paEnd
+  +8    ULONG                paLimit
+  +12   32PUCHAR             pUseMap
+  +16   32PUCHAR             pUseBase
+
+=== fshash_t  (size 16) ===
+  +0    0x13D5               hashdata
+
+=== fslog_t  (size 180) ===
+  +0    ULONG                version
+  +4    ULONG                magic1
+  +8    ULONG                magic2
+  +12   ULONG                bankselect
+  +16   0x13CC               fsmemblk
+  +48   0x13CC               kmemblk
+  +80   0x13CC               fsmemblk_2
+  +112  0x13CC               kmemblk_2
+  +12   _CEGUID              guid
+  +28   ULONG                dwRestoreFlags
+  +32   ULONG                dwRestoreStart
+  +36   ULONG                dwRestoreSize
+  +144  ULONG                virtbase
+  +148  ULONG                entries
+  +152  USHORT               hDbaseRoot
+  +154  USHORT               hReg
+  +156  ULONG                dwReplMask
+  +160  ULONG                flags
+  +164  fshash_t             pwhash
+  +180  0x13D0               log
+
+=== fslogentry_t  (size 16) ===
+  +0    ULONG                type
+  +4    ULONG                d1
+  +8    ULONG                d2
+  +12   ULONG                d3
+
+=== FSMAP  (size 44) ===
+  +0    32PVOID              hNext
+  +4    32PVOID              hFile
+  +8    32PUCHAR             pBase
+  +12   32PUCHAR             pDirty
+  +16   ULONG                length
+  +20   ULONG                filelen
+  +24   ULONG                reslen
+  +28   0x1090               name
+  +32   0x10F7               lpmlist
+  +36   ULONG                dwDirty
+  +40   UCHAR                bRestart
+  +41   UCHAR                bNoAutoFlush
+
+=== FULLREF  (size 64) ===
+  +0    0x1195               usRefs
+
+=== heapptr_t  (size 20) ===
+  +0    USHORT               size
+  +2    RCHAR                zero
+  +3    UCHAR                cSpare
+  +4    0x13B8               classname
+  +8    32PUCHAR             fptr
+  +12   LONG                 cUsed
+  +16   LONG                 cMax
+
+=== HINSTANCE__  (size 4) ===
+  +0    INT4                 unused
+
+=== info  (size 8) ===
+  +0    ULONG                rva
+  +4    ULONG                size
+
+=== KDataStruct  (size 896) ===
+  +0    32PULONG             lpvTls
+  +4    0x1042               ahSys
+  +132  RCHAR                bResched
+  +133  RCHAR                cNest
+  +134  RCHAR                bPowerOff
+  +135  RCHAR                bProfileOn
+  +136  ULONG                cMsec
+  +140  ULONG                cDMsec
+  +144  0x1044               pCurPrc
+  +148  0x1046               pCurThd
+  +152  32PVOID              hPrcBreak
+  +156  ULONG                handleBase
+  +160  0x104B               aSections
+  +416  0x104E               alpeIntrEvents
+  +544  0x1042               alpvIntrData
+  +672  ULONG                pAPIReturn
+  +676  ULONG                bIntrIndexLow
+  +680  ULONG                bIntrIndexHigh
+  +684  0x104F               bIntrNumber
+  +716  0x1046               g_CurFPUOwner
+  +720  0x1050               alPad
+  +768  0x1051               aInfo
+
+=== kernptr_t  (size 36) ===
+  +0    0x11F4               OEMClearDebugCommError
+  +4    0x11F7               OEMWriteDebugByte
+  +8    0x1002               OEMReadDebugByte
+  +12   0x11F8               DbgVerify
+  +16   0x11FA               DBG_CallCheck
+  +20   0x11FC               OEMWriteOtherDebugString
+  +24   0x11F4               FlushCache
+  +28   0x11E1               pKData
+  +32   0x11F4               FPUFlushContext
+
+=== LSInfo_t  (size 32) ===
+  +0    ULONG                startip
+  +4    ULONG                flags
+  +8    32PVOID              lpStack
+  +12   32PVOID              lpOldStack
+  +16   ULONG                cbStack
+  +20   ULONG                cmdlen
+  +24   ULONG                namelen
+  +28   32PVOID              hEvent
+
+=== LZ  (size 20524) ===
+  +0    INT4                 iOutCnt
+  +4    INT4                 iOutBase
+  +8    INT4                 iOutPos
+  +12   INT4                 iOutLen
+  +16   32PUCHAR             pbOut
+  +20   INT4                 iInpPos
+  +24   INT4                 iInpLen
+  +28   32PUCHAR             pbInp
+  +32   INT4                 fZero
+  +36   INT4                 iStep
+  +40   INT4                 iNextFree
+  +44   0x101C               plist
+  +16428 0x101D               pusHash
+
+=== LZList  (size 4) ===
+  +0    USHORT               usNext
+  +2    USHORT               usOffset
+
+=== mem_t  (size 16) ===
+  +0    ULONG                startptr
+  +4    ULONG                length
+  +8    ULONG                extension
+  +12   ULONG                sync
+
+=== MemBlock  (size 76) ===
+  +0    ULONG                alk
+  +4    UCHAR                cUses
+  +5    UCHAR                flags
+  +6    SHORT                ixBase
+  +8    SHORT                hPf
+  +10   SHORT                cLocks
+  +12   0x1115               aPages
+
+=== MemoryInfo  (size 16) ===
+  +0    32PVOID              pKData
+  +4    32PVOID              pKEnd
+  +8    UINT4                cFi
+  +12   0x10B4               pFi
+
+=== Module  (size 188) ===
+  +0    32PVOID              lpSelf
+  +4    0x1192               pMod
+  +8    32PUCHAR             modname
+  +12   ULONG                inuse
+  +16   0x1195               refcnt
+  +80   32PVOID              BasePtr
+  +84   ULONG                DbgFlags
+  +88   0x126B               ZonePtr
+  +92   ULONG                startip
+  +96   openexe_t            oe
+  +112  e32_lite             e32
+  +176  0x1189               o32_ptr
+  +180  ULONG                breadcrumb
+  +184  ULONG                dwFlags
+
+=== MUTEX  (size 104) ===
+  +0    32PVOID              hNext
+  +4    0x1373               proxfirst
+  +40   0x1373               proxlast
+  +76   USHORT               highest
+  +78   USHORT               LockCount
+  +80   0x122C               pPrevOwned
+  +84   0x122C               pNextOwned
+  +88   0x1211               pSamePrioPrev
+  +92   0x1211               pSamePrioNext
+  +96   0x1046               pOwner
+  +100  0x1090               name
+
+=== Name  (size 520) ===
+  +0    0x1095               name
+
+=== o32_lite  (size 28) ===
+  +0    ULONG                o32_vsize
+  +4    ULONG                o32_rva
+  +8    ULONG                o32_realaddr
+  +12   ULONG                o32_access
+  +16   ULONG                o32_flags
+  +20   ULONG                o32_psize
+  +24   ULONG                o32_dataptr
+
+=== o32_obj  (size 40) ===
+  +0    0x108A               o32_name
+  +8    ULONG                o32_vsize
+  +12   ULONG                o32_rva
+  +16   ULONG                o32_psize
+  +20   ULONG                o32_dataptr
+  +24   ULONG                o32_realaddr
+  +28   ULONG                o32_access
+  +32   ULONG                o32_temp3
+  +36   ULONG                o32_flags
+
+=== o32_rom  (size 24) ===
+  +0    ULONG                o32_vsize
+  +4    ULONG                o32_rva
+  +8    ULONG                o32_psize
+  +12   ULONG                o32_dataptr
+  +16   ULONG                o32_realaddr
+  +20   ULONG                o32_flags
+
+=== OEinfo_t  (size 1040) ===
+  +0    0x1095               plainname
+  +520  0x1095               tmpname
+
+=== openexe_t  (size 16) ===
+  +0    INT4                 hppfs
+  +0    32PVOID              hf
+  +0    0x108E               tocptr
+  +4    UCHAR                filetype
+  +5    UCHAR                bIsOID
+  +6    USHORT               pagemode
+  +8    ULONG                offset
+  +12   0x1090               lpName
+  +12   ULONG                ceOid
+
+=== Process  (size 156) ===
+  +0    UCHAR                procnum
+  +1    UCHAR                DbgActive
+  +2    UCHAR                bChainDebug
+  +3    UCHAR                bPadding1
+  +4    0x1144               lpBlockList
+  +8    32PVOID              hProc
+  +12   ULONG                dwVMBase
+  +16   0x1046               pTh
+  +20   ULONG                aky
+  +24   32PVOID              BasePtr
+  +28   32PVOID              hDbgrThrd
+  +32   32PUCHAR             procname
+  +36   ULONG                tlsLowUsed
+  +40   ULONG                tlsHighUsed
+  +44   0x111C               pfnEH
+  +48   0x126B               ZonePtr
+  +52   0x1046               pMainTh
+  +56   ULONG                ulGP
+  +60   0x136E               pStdNames
+  +72   openexe_t            oe
+  +88   e32_lite             e32
+  +152  0x1189               o32_ptr
+
+=== ProcStartInfo  (size 20) ===
+  +0    32PUSHORT            lpszImageName
+  +4    32PUSHORT            lpszCmdLine
+  +8    0x12C0               lppi
+  +12   32PVOID              he
+  +16   INT4                 fdwCreate
+
+=== PROXY  (size 36) ===
+  +0    0x1144               pQPrev
+  +4    0x1144               pQNext
+  +8    0x1144               pThLinkPrev
+  +12   0x1144               pThLinkNext
+  +16   32PUCHAR             pObject
+  +20   USHORT               dwType
+  +22   USHORT               prio
+  +24   0x1046               pTh
+  +28   ULONG                dwCount
+  +32   ULONG                dwRetVal
+
+=== ROMHDR  (size 84) ===
+  +0    ULONG                dllfirst
+  +4    ULONG                dlllast
+  +8    ULONG                physfirst
+  +12   ULONG                physlast
+  +16   ULONG                nummods
+  +20   ULONG                ulRAMStart
+  +24   ULONG                ulRAMFree
+  +28   ULONG                ulRAMEnd
+  +32   ULONG                ulCopyEntries
+  +36   ULONG                ulCopyOffset
+  +40   ULONG                ulProfileLen
+  +44   ULONG                ulProfileOffset
+  +48   ULONG                numfiles
+  +52   ULONG                ulKernelFlags
+  +56   ULONG                ulFSRamPercent
+  +60   ULONG                ulDrivglobStart
+  +64   ULONG                ulDrivglobLen
+  +68   ULONG                ulIntrStackStart
+  +72   ULONG                ulIntrStackLen
+  +76   ULONG                ulTrackingStart
+  +80   ULONG                ulTrackingLen
+
+=== RunList_t  (size 80) ===
+  +0    UINT4                highest
+  +4    0x1046               pth
+  +8    0x12CC               RunQs
+
+=== RUNQ_t  (size 8) ===
+  +0    0x1046               pHead
+  +4    0x1046               pTail
+
+=== STUBEVENT  (size 8) ===
+  +0    ULONG                dwNull
+  +4    0x1144               pprox
+
+=== tagHEAPENTRY32  (size 36) ===
+  +0    ULONG                dwSize
+  +4    32PVOID              hHandle
+  +8    ULONG                dwAddress
+  +12   ULONG                dwBlockSize
+  +16   ULONG                dwFlags
+  +20   ULONG                dwLockCount
+  +24   ULONG                dwResvd
+  +28   ULONG                th32ProcessID
+  +32   ULONG                th32HeapID
+
+=== tagHEAPLIST32  (size 16) ===
+  +0    ULONG                dwSize
+  +4    ULONG                th32ProcessID
+  +8    ULONG                th32HeapID
+  +12   ULONG                dwFlags
+
+=== tagMODULEENTRY32  (size 1076) ===
+  +0    ULONG                dwSize
+  +4    ULONG                th32ModuleID
+  +8    ULONG                th32ProcessID
+  +12   ULONG                GlblcntUsage
+  +16   ULONG                ProccntUsage
+  +20   32PUCHAR             modBaseAddr
+  +24   ULONG                modBaseSize
+  +28   0x11D7               hModule
+  +32   0x1095               szModule
+  +552  0x1095               szExePath
+  +1072 ULONG                dwFlags
+
+=== tagPROCESSENTRY32  (size 564) ===
+  +0    ULONG                dwSize
+  +4    ULONG                cntUsage
+  +8    ULONG                th32ProcessID
+  +12   ULONG                th32DefaultHeapID
+  +16   ULONG                th32ModuleID
+  +20   ULONG                cntThreads
+  +24   ULONG                th32ParentProcessID
+  +28   LONG                 pcPriClassBase
+  +32   ULONG                dwFlags
+  +36   0x1095               szExeFile
+  +556  ULONG                th32MemoryBase
+  +560  ULONG                th32AccessKey
+
+=== tagTHREADENTRY32  (size 36) ===
+  +0    ULONG                dwSize
+  +4    ULONG                cntUsage
+  +8    ULONG                th32ThreadID
+  +12   ULONG                th32OwnerProcessID
+  +16   LONG                 tpBasePri
+  +20   LONG                 tpDeltaPri
+  +24   ULONG                dwFlags
+  +28   ULONG                th32AccessKey
+  +32   ULONG                th32CurrentProcessID
+
+=== TH32HEAPENTRY  (size 40) ===
+  +0    tagHEAPENTRY32       heapentry
+  +36   0x13EE               pNext
+
+=== TH32HEAPLIST  (size 24) ===
+  +0    tagHEAPLIST32        heaplist
+  +16   0x13EE               pHeapEntry
+  +20   0x13E9               pNext
+
+=== TH32MOD  (size 1080) ===
+  +0    tagMODULEENTRY32     modentry
+  +1076 0x13E5               pNext
+
+=== TH32PROC  (size 572) ===
+  +0    tagPROCESSENTRY32    procentry
+  +564  0x13EE               pMainHeapEntry
+  +568  0x12AA               pNext
+
+=== TH32THREAD  (size 40) ===
+  +0    tagTHREADENTRY32     threadentry
+  +36   0x13E7               pNext
+
+=== THRDDBG  (size 116) ===
+  +0    32PVOID              hFirstThrd
+  +4    32PVOID              hNextThrd
+  +8    0x1023               psavedctx
+  +12   32PVOID              hEvent
+  +16   32PVOID              hBlockEvent
+  +20   _DEBUG_EVENT         dbginfo
+
+=== Thread  (size 324) ===
+  +0    USHORT               wInfo
+  +2    UCHAR                bSuspendCnt
+  +3    UCHAR                bInfo
+  +4    0x1144               lpBlockList
+  +8    0x1046               pNextInProc
+  +12   0x1044               pProc
+  +16   0x1044               pOwnerProc
+  +20   ULONG                aky
+  +24   0x1114               pcstkTop
+  +28   ULONG                dwStackBase
+  +32   ULONG                dwStackBound
+  +36   32PULONG             tlsPtr
+  +40   ULONG                dwSleepCnt
+  +40   32PVOID              hLastCrit
+  +44   0x1046               pNextSleepRun
+  +48   0x1046               pPrevSleepRun
+  +52   0x1144               lpProxy
+  +56   ULONG                dwLastError
+  +56   0x1144               lpPendProx
+  +60   32PVOID              hTh
+  +64   0x1211               pCritMut
+  +68   0x1046               pPrevInProc
+  +72   0x1243               pThrdDbg
+  +76   ULONG                dwCount
+  +80   0x10F7               lpce
+  +84   0x1046               pNextRequeue
+  +88   0x1046               pPrevRequeue
+  +92   _CONTEXT             ctx
+  +320  ULONG                dwThreadTime
+
+=== THSNAP  (size 28) ===
+  +0    32PUCHAR             pNextFree
+  +4    32PUCHAR             pHighCommit
+  +8    32PUCHAR             pHighReserve
+  +12   0x12AA               pProc
+  +16   0x13E5               pMod
+  +20   0x13E7               pThread
+  +24   0x13E9               pHeap
+
+=== TOCentry  (size 32) ===
+  +0    ULONG                dwFileAttributes
+  +4    _FILETIME            ftTime
+  +12   ULONG                nFileSize
+  +16   32PRCHAR             lpszFileName
+  +20   ULONG                ulE32Offset
+  +24   ULONG                ulO32Offset
+  +28   ULONG                ulLoadOffset
+
+=== xt_struct  (size 3092) ===
+  +0    ULONG                dwOp
+  +4    0x1409               dwTime
+  +776  0x1409               dwCount
+  +1548 0x1409               dwMax
+  +2320 0x1409               dwMin
+
+; 100 defined aggregates
