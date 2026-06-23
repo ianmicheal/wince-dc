@@ -1,0 +1,12 @@
+# Large / copyrighted binaries — reproducible from the SDK, never committed
+reference/*.bin
+reference/kernel-obj/
+# Build artifacts
+**/*.obj
+**/*.lib
+**/*.pdb
+**/*.log
+toolchain/smoke/
+# External clones live outside this repo (see toolchain/setenv.bat):
+#   C:\dev\Dreamcast\wince-src                       (leaked CE 3.0 source)
+#   C:\dev\Dreamcast\vendor\WindowsCE-Build-Tools    (gweslab SH compiler)
