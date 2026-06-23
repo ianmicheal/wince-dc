@@ -38,6 +38,7 @@ powershell -File wrap-image.ps1 -NkBin C:\wcedreamcast\release\retail\NK.bin ^
                                 -Out   C:\wcedreamcast\release\retail\0winceos.bin
 build-nklib.bat retail                 :: build whole kernel core -> reference\kernel-obj\nkmain.lib
 build-oal.bat   retail                 :: build reconstructed DC OAL -> reference\kernel-obj\oal_dc.lib
+build-crt.bat   retail                 :: build minimal SH-4 C runtime -> reference\kernel-obj\crt.lib
 build-nk.bat    retail                 :: TRIAL LINK nkmain.lib+oal_dc.lib -> nk.exe (lists unresolved)
 build-kernel.bat retail [file.c]       :: compile one NK/SHX C source (smoke / per-file)
 build-asm.bat    retail [file.src]     :: assemble one SHX shasm source (-cpu=SH4 -DCELOG=0)

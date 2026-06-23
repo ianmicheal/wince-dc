@@ -142,4 +142,18 @@ structural cross-ref resolves. **60 unresolved externals remain**, in buckets:
 - **kernel stubs / missing files (6):** `CECompress/CEDecompress` (compile `compress.c`/`nocompr`),
   `ModuleJit/InitializeJit/PKDInit` (JIT + kernel-dbg — stub for nknodbg), `SC_GetTickCount`.
 
-Next: minimal SH-4 CRT + the OAL stubs above, re-link to zero, then makeimg + wrap-image.ps1 → Flycast.
+### CRT — DONE (`NK\CRT\SHX` → `crt.lib`, `build-crt.bat`)
+mem/str + integer-divide + 64-bit shift in C (shift-subtract; the helper ABI is standard SH, so
+C `_xxx` → `__xxx` symbol with no recursion), soft-float STUBBED. Cleared all 29 CRT symbols
+(+`__lshi64`/`__rshui64`). **Link is now 60 → 31 unresolved**, all OAL/kernel (zero CRT).
+
+### Remaining 31 (after CRT) — OAL funcs + kernel stubs
+- OAL to write: `OEMGetPlatformVersion`/`OEMPlatformVersion`/`OEMGetExtensionDRAM`, RTC
+  (`OEMGetRealTime`/`OEMSetRealTime`/`OEMSetAlarmTime`), `OEMIoControl`, parallel
+  (`OEMParallelPortInit`/`GetByte`/`SendByte`,`NoPPFS`), `SerialInit`, power/idle
+  (`OEMPowerOff`/`OEMIdle`/`OEMNMI`/`OEMClearDebugCommError`), `SH4CacheLines`, `GInterruptList`,
+  ISR stubs (`DMAC0-3ISR`/`JTAGISR`/`Timer1ISR`), `dwReschedTime` (KData global).
+- kernel stubs / missing: `CECompress`/`CEDecompress` (compile `compress.c`/`nocompr`),
+  `ModuleJit`/`InitializeJit`/`PKDInit` (JIT + kernel-dbg — stub for nknodbg), `SC_GetTickCount`.
+
+Next: write the OAL stubs above + the kernel stubs, re-link to zero, then makeimg + wrap-image.ps1 → Flycast.
