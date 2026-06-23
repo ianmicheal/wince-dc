@@ -12,3 +12,6 @@ Thumbs.db
 # NOTE: vendor/ IS committed on purpose (leak source + SH toolchain) so the repo
 #       clones-and-builds offline. Only C:\wcedreamcast (the DC SDK) is external
 #       and fetched separately — see RESUME.md / toolchain\bootstrap.ps1.
+reference/disc/
+reference/*.iso
+reference/*.cdi
