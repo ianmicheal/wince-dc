@@ -11,6 +11,12 @@ extern void LoadKPage(void);
 extern void DumpFrame(PTHREAD pth, PCONTEXT pctx, DWORD dwExc, DWORD info);
 extern void APICallReturn(void);
 
+/* DC bring-up: raw SCIF markers (SCIF is brought up by our StartUp before this
+ * runs), so we can localize early-init faults even in a retail build where the
+ * kernel's own banner/DEBUGMSG prints don't help. Remove once booting. */
+extern void OEMWriteDebugByte(unsigned char ch);
+#define DBGMARK(c) OEMWriteDebugByte((unsigned char)(c))
+
 #ifdef SH4
 void SaveFloatContext(PTHREAD);
 void RestoreFloatContext(PTHREAD);
@@ -45,21 +51,26 @@ void SH3Init(int cpuType) {
         *(volatile ushort *)0xffffff80 = SH3FQCR_Fast;
 #endif
 
+    DBGMARK('a');                       /* reached SH3Init */
     /* Disable the cpu cache & flush it. */
     CCR = 0;
     CCR = CACHE_FLUSH;
+    DBGMARK('b');                       /* cache flushed */
 
     /* Zero out kernel data page. */
     memset(&KData, 0, sizeof(KData));
     KData.handleBase = 0x80000000;
     KData.pAPIReturn = (ulong)APICallReturn;
+    DBGMARK('c');                       /* KData zeroed */
 
     /* Initialize SectionTable in KPage */
     for (ix = 1 ; ix <= SECTION_MASK ; ++ix)
         SectionTable[ix] = NULL_SECTION;
+    DBGMARK('d');                       /* SectionTable done */
 
     /* Copy kernel data to RAM & zero out BSS */
     KernelRelocate(pTOC);
+    DBGMARK('e');                       /* KernelRelocate done */
 
     OEMInitDebugSerial();			// initialize serial port
     OEMWriteDebugString(TEXT("\r\nWindows CE Kernel for Hitachi SH Built on ") TEXT(__DATE__)
@@ -74,8 +85,11 @@ void SH3Init(int cpuType) {
     MMUTEA = 0;			/* clear transation address */
     MMUTTB = (DWORD)SectionTable; /* set translation table base address */
     MMUPTEH = 0;		/* clear ASID */
+    DBGMARK('f');                       /* about to enable MMU (MMUCR.AT) */
     MMUCR = TLB_FLUSH | TLB_ENABLE;
+    DBGMARK('g');                       /* MMU enabled, survived (Flycast full-MMU) */
     LoadKPage();
+    DBGMARK('h');                       /* LoadKPage done */
 
     /* Copy interlocked api code into the kpage */
     DEBUGCHK(sizeof(KData) <= FIRST_INTERLOCK);
@@ -86,9 +100,12 @@ void SH3Init(int cpuType) {
     // may not be properly initialized before that point.
     CCR = CACHE_ENABLE | OEMExtraCCR;
     NKDbgPrintfW(L"CCR=%4.4x\r\n", CCR);
+    DBGMARK('i');                       /* cache enabled */
 
     OEMInit();			// initialize firmware
+    DBGMARK('j');                       /* OEMInit returned */
     KernelFindMemory();
+    DBGMARK('k');                       /* KernelFindMemory done - SH3Init complete */
 #ifdef DEBUG
     OEMWriteDebugString(TEXT("SH3Init done.\r\n"));
 #endif
