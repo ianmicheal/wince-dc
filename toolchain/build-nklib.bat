@@ -28,6 +28,8 @@ rem ---- kernel defines: WINCEOEM/WINCEMACRO gate the PRIVATE pkfuncs/mkfuncs,
 rem which authoritatively define VA_SECTION/SECTION_SHIFT/CURTLSPTR_OFFSET/
 rem KINFO_OFFSET (no reconstruction patch needed -- see docs/04-kernel-build.md).
 set KDEFS=-DSH4=1 -DSHx=1 -DUNDER_CE=300 -D_WIN32_WCE=300 -DUNICODE -D_UNICODE -DKERNEL -DWINCEOEM=1 -DWINCEMACRO -DIN_KERNEL -DDBGSUPPORT
+rem debug build: enable DEBUG (DEBUGMSG/DEBUGCHK + the kernel's own diagnostics)
+if /I "%BLDTYPE%"=="debug" set KDEFS=%KDEFS% -DDEBUG
 set FORCEINC=
 
 rem ---- machine-independent C (NKNORMAL\SOURCES) ------------------------------

@@ -9,9 +9,9 @@
 ; OAL-NOTES.md.
 ;
 ; The DC IPL / 1ST_READ loader has already copied the RAMIMAGE into RAM and
-; jumped here. All real SH-4 bring-up (VBR, cache CCR, MMU/TLB, stacks) is done
-; by KernelStart (nk:shexcept.obj, built from the leak into nkmain.lib), so this
-; stub only blocks exceptions (SR.BL=1) and transfers to KernelStart.
+; jumped here. Real SH-4 bring-up (VBR, cache CCR, MMU/TLB, stacks) is done by
+; KernelStart (nk:shexcept.obj). This stub plants the Flycast WinCE detector,
+; blocks exceptions (SR.BL=1), and transfers to KernelStart.
 ;
 ; Environment: privileged, MMU off, called once at boot. Never returns.
 ;
@@ -23,50 +23,16 @@
 	LEAF_ENTRY StartUp
 	ALTERNATE_ENTRY _StartUp	; linker /entry:StartUp resolves the C-decorated _StartUp
 
-	; --- EARLY DEBUG: raw-SCIF bring-up + emit "NK" so we know the from-source
-	;     kernel entry actually executed (before KernelStart's SH-4 init). SCIF is
-	;     in P4 (0xFFE80000), unmapped, so this works with the MMU off. 57600 8N1.
-	;     (KOS scif_init sequence.) Clobbers r0-r4; StartUp reloads them below.
-	mov.l	pSCIF, r1		; r1 = 0xFFE80000
-	mov	#0, r0
-	mov.w	r0, @(8, r1)		; SCSCR2 = 0      (TX/RX off)
-	mov	#6, r0
-	mov.w	r0, @(0x18, r1)		; SCFCR2 = 0x06   (reset both FIFOs)
-	mov	#0, r0
-	mov.w	r0, @r1			; SCSMR2 = 0      (8N1, Pck/1)
-	mov	#26, r0
-	mov.b	r0, @(4, r1)		; SCBRR2 = 26     (57600 @ Pck 50MHz)
-	mov.l	pSDly, r2
-sd1:	dt	r2
-	bf	sd1			; settle
-	mov	#0x40, r0
-	mov.w	r0, @(0x18, r1)		; SCFCR2 = 0x40   (unreset, trig 8)
-	mov	#0x30, r0
-	mov.w	r0, @(8, r1)		; SCSCR2 = 0x30   (TE|RE)
-	mov.l	pSDly, r2
-sd2:	dt	r2
-	bf	sd2
-	mov	#0x4E, r4		; 'N'
-	bsr	ScifPutc
-	nop
-	mov	#0x4B, r4		; 'K'
-	bsr	ScifPutc
-	nop
-
-	; --- plant Flycast's WinCE detector: write "SH-4 Kernel" (UTF-16) to
-	;     0x8C0110A8 via the UNCACHED P2 alias (0xAC0110A8) so it reaches RAM
-	;     regardless of cache state, here - just before KernelStart enables the
-	;     MMU and Flycast (mmu_set_state) checks for it. Also 0x8C011118. ---
+	; Plant Flycast's WinCE detector: write UTF-16 "SH-4 Kernel" to 0x8C0110A8
+	; and 0x8C011118 via the UNCACHED P2 alias (0xAC01...) so it reaches RAM
+	; regardless of cache state, before KernelStart enables the MMU - Flycast's
+	; mmu_set_state() only emulates the full MMU when it sees that string.
 	mov.l	pMagicA, r2		; r2 = 0xAC0110A8
 	bsr	PlantMagic
 	nop
 	mov.l	pMagicB, r2		; r2 = 0xAC011118
 	bsr	PlantMagic
 	nop
-	mov	#0x3E, r4		; '>'  (StartUp finished, magic planted)
-	bsr	ScifPutc
-	nop
-	; --- end early debug ---
 
 	stc	SR, r0			; r0 = current SR
 	mov.l	SRSetBL, r2		; r2 = 0x10000000 (BL)
@@ -79,8 +45,6 @@ sd2:	dt	r2
 	.align	4
 SRSetBL:	.data.l	H'10000000	; SR.BL = 1
 pKernelStart:	.data.l	KernelStart
-pSCIF:		.data.l	H'FFE80000
-pSDly:		.data.l	H'00040000
 pMagicA:	.data.l	H'AC0110A8	; uncached alias of 0x8C0110A8
 pMagicB:	.data.l	H'AC011118	; uncached alias of 0x8C011118
 	ENTRY_END StartUp
@@ -103,19 +67,6 @@ pmloop:	mov.w	@r3+, r0
 MagicStr:	.data.w	H'0053, H'0048, H'002D, H'0034, H'0020, H'004B
 		.data.w	H'0065, H'0072, H'006E, H'0065, H'006C
 	ENTRY_END PlantMagic
-
-;
-; ScifPutc - emit the byte in r4 to the SCIF (base in r1), polled. Clobbers r0.
-;
-	LEAF_ENTRY ScifPutc
-sppoll:	mov.w	@(0x10, r1), r0		; r0 = SCFSR2
-	tst	#0x20, r0		; TDFE (room in TX FIFO)?
-	bt	sppoll			; wait until set
-	mov	r4, r0			; mov.b store needs the byte in r0
-	mov.b	r0, @(0x0C, r1)		; SCFTDR2 = char
-	rts
-	nop
-	ENTRY_END ScifPutc
 
 ;
 ; OEMNMI - non-maskable interrupt hook. shexcept.src imports it as a bare asm

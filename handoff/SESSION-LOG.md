@@ -124,6 +124,30 @@ cached 0x8C000000) than the stripped CE 2.12 game runtime — toward a shell / m
 4. Build `nknodbg.exe`, drop it over `C:\wcedreamcast\release\retail\nknodbg.exe`,
    `build-image.bat retail`, `wrap-image.ps1`, test on Flycast/lxdream then HW.
 
+## 2026-06-23 (later) — THE KERNEL BOOTS (from-source nk.exe runs on Flycast)
+Built a bootable disc and iterated kernel bring-up on Flycast/lxdream:
+- **Disc:** GDI via the Half-Life DC pipeline (`utils\buildgdi.exe` + HL-DC `ip.bin`, bootfile
+  `0WINCEOS.BIN`) is the working path (`make-gdi.ps1`); CDI via mkisofs+cdi4dc also works
+  (`make-disc.ps1`). HL-DC is itself a WinCE port so its pipeline is the right reference.
+- **Flycast MMU gate:** Flycast (`core/hw/sh4/modules/mmu.cpp` mmu_set_state) only emulates the
+  full SH-4 MMU when it finds UTF-16 "SH-4 Kernel" at VA 0x8C0110A8/0x8C011118. Our link order
+  left those zero, so the kernel faulted the instant it set MMUCR.AT. Fixed: StartUp writes the
+  magic to RAM (uncached) + wrap-image.ps1 plants it at 0x10A8.
+- **pTOC bug (the big one):** romimage MIS-PATCHES the C `pTOC` global because we link at
+  /base:0x10000 (the linker LNK1249's on EXEBASE 0x8C040000) - its GetMapSymbols resolves pTOC to
+  the wrong address, leaving the real global (VA 0x8c0414a8) = 0xFFFFFFFF. Retail compiles out the
+  pTOC==-1 guard, so KernelRelocate walked garbage copy entries (infinite loop). Fixed in
+  mdsh3.c SH3Init: recover the real ROMHDR from the ROM signature romimage DOES write at
+  RAMIMAGE+0x44 (0x8C010040="ECEC") and fix the global pre-MMU.
+- **Result:** the from-source kernel now boots through KernelRelocate -> the real CE banner
+  ("Windows CE Kernel for Hitachi SH... SH-4 Kernel") -> MMU+cache on -> OEMInit ("Set 4 is
+  detected") -> "Booting Windows CE version 3.00" -> memory config -> the first thread. It then
+  faults starting the first thread at PC=0xE3007FFC (CE PSL/API syscall-trap range) - the
+  API-dispatch/trap mechanism is the next layer. Added `-DDEBUG` build support (build-*.bat
+  [debug]) for more diagnostics; debug nk.exe links clean (0 unresolved).
+- Diagnostic method: raw-SCIF markers in StartUp/SH3Init/KernelRelocate (now removed; kernel
+  prints its own messages). build-nk.bat adds /MAP + /DEBUGTYPE:FIXUP for romimage.
+
 ## Key facts to keep handy
 - Image base: RAMIMAGE @ `8C010000` (cached) = phys `0C010000`. Wrapper len pads to `0x800`.
 - `ce.bib` pulls the kernel as `nk.exe` FROM `nknodbg.exe`. 28 other modules stay stock 2.12.

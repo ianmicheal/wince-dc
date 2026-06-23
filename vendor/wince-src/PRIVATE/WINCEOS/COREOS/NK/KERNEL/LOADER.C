@@ -603,10 +603,6 @@ void SC_SetCleanRebootFlag(void) {
 
 // Relocate the kernel
 
-/* DC bring-up: SCIF markers to localize the fault inside KernelRelocate. */
-extern void OEMWriteDebugByte(unsigned char ch);
-#define KRMARK(c) OEMWriteDebugByte((unsigned char)(c))
-
 void KernelRelocate(ROMHDR *const pTOC)
 {
 	ULONG loop;
@@ -617,21 +613,15 @@ void KernelRelocate(ROMHDR *const pTOC)
 		while (1) ;
 	}
 #endif
-	KRMARK('1');                        /* entered KernelRelocate, pTOC ok */
 	KInfoTable[KINX_PTOC] = (long)pTOC;
-	KRMARK('2');                        /* KInfoTable[PTOC] written */
 	// This is where the data sections become valid... don't read globals until after this
 	for (loop = 0; loop < pTOC->ulCopyEntries; loop++) {
 		cptr = (COPYentry *)(pTOC->ulCopyOffset + loop*sizeof(COPYentry));
-		KRMARK('3');                    /* about to copy this section */
 		if (cptr->ulCopyLen)
 			memcpy((LPVOID)cptr->ulDest,(LPVOID)cptr->ulSource,cptr->ulCopyLen);
-		KRMARK('4');                    /* memcpy done */
 		if (cptr->ulCopyLen != cptr->ulDestLen)
 			memset((LPVOID)(cptr->ulDest+cptr->ulCopyLen),0,cptr->ulDestLen-cptr->ulCopyLen);
-		KRMARK('5');                    /* memset done */
 	}
-	KRMARK('6');                        /* copy loop complete */
 	// Now you can read global variables...
 	PtrKData = &KData;	// Set this to allow displaying the kpage from the KD.
 	MainMemoryEndAddress = pTOC->ulRAMEnd;

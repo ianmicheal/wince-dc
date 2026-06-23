@@ -17,6 +17,7 @@ if not exist "%OUTDIR%" mkdir "%OUTDIR%"
 set CE3SDK=%GWESLAB%\ce3-ppc2k\include
 set INCLUDE=%NK%\INC;%NK%\KERNEL\SHX;%GWESLAB%\ce3-oak\INC;%CE3SDK%
 set KDEFS=-DSH4=1 -DSHx=1 -DUNDER_CE=300 -D_WIN32_WCE=300 -DUNICODE -D_UNICODE -DKERNEL -DWINCEOEM=1 -DWINCEMACRO -DIN_KERNEL
+if /I "%BLDTYPE%"=="debug" set KDEFS=%KDEFS% -DDEBUG
 
 set CSRC=crtmem crtdiv crtshift crtfp
 set OBJS=
