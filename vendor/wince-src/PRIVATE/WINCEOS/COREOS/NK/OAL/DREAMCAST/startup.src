@@ -21,6 +21,7 @@
 	.import	KernelStart
 
 	LEAF_ENTRY StartUp
+	ALTERNATE_ENTRY _StartUp	; linker /entry:StartUp resolves the C-decorated _StartUp
 	stc	SR, r0			; r0 = current SR
 	mov.l	SRSetBL, r2		; r2 = 0x10000000 (BL)
 	mov.l	pKernelStart, r1	; r1 = &KernelStart

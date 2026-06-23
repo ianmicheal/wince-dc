@@ -15,8 +15,8 @@
 #endif
 
 extern BOOL HookInterrupt(int idInt, FARPROC pfn);
-extern void Timer0ISR(void);
-extern void Timer1ISR(void);
+ULONG Timer0ISR(void);                  /* defined below; hooked at INTRVEC_TMU0 */
+extern void Timer1ISR(void);            /* aux timer ISR (TODO) */
 
 /* OAL clock globals (the kernel reads these for tick/QPC scaling). */
 DWORD g_TicksPerPeriod;          /* TMU0 reload = 312500 -> 25 ms at PCLK/4 (12.5 MHz) */
@@ -59,7 +59,7 @@ void InitClock(void)
 }
 
 /* TMU0 underflow -> system tick. Returns the SYSINTR the kernel should schedule. */
-ULONG OEMTimer0ISR(void)
+ULONG Timer0ISR(void)
 {
     USHORT tcr;
 

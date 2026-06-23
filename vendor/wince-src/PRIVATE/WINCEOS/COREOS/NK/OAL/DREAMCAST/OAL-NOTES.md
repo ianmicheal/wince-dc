@@ -123,6 +123,23 @@ we instead write plain text out the SH-4 SCIF (`0xFFE80000`), polled, 8N1 @ 5760
   to give the 0x10-0x1B SYSINTRs real device names (KOS has the SB_ISTNRM/EXT bit table).
 - `Timer1ISR` body (aux timer); `mdppfs`/`oemwdm` — bus access (`OEMGetBusDataByOffset`) + WDM glue.
 - Decode the `OEMIoControl` IOCTL constants (`DAT_8C03D440..450`) → `IOCTL_HAL_*` numbers.
-- **Trial link:** `nkmain.lib` + `oal_dc.lib` (EXEENTRY=StartUp, EXEBASE per SHX\SOURCES) — resolve
-  remaining externs (per-source ISRs `JTAG/DMAC*/SCIFISR/Timer1ISR`, `GInterruptList`, `HookInterrupt`,
-  `pTOC`, `CurMSec`/`dwReschedTime`), then makeimg + wrap-image.ps1 → Flycast.
+## Trial link — DONE (`build-nk.bat` → `nk-link.log`)
+`link /machine:SH4 /subsystem:windowsce,3.00 /entry:StartUp /base:0x8C040000 nkmain.lib oal_dc.lib
+corelibc.lib`. The graph expands cleanly from `_StartUp` through the whole kernel + OAL — every
+structural cross-ref resolves. **60 unresolved externals remain**, in buckets:
+- **SH C runtime — mem/str (5):** `memcpy memset memcmp strcmp strlen` — write ourselves (trivial).
+- **SH integer runtime (5):** `__divlu __modlu __divi64 __modi64 __modls` — SH has no divide; need
+  real impls (can't use C `/` — infinite recursion). Provide as asm or bit-shift routines.
+- **SH soft-float (19):** `__addd __subd __muld __divd __itod __dtoi … _sqrt` — only on the FPU-trap
+  path (`HandleHWFloatException`); stub for first boot.
+  > The DC SDK ships NO static libc (only `coredll.lib`, an import lib the kernel can't use). The
+  > real kernel linked `fulllibc.lib` we don't have → we write a minimal SH-4 CRT (e.g. `NK\OAL\CRT`).
+- **OAL funcs to write (~25):** RTC (`OEMGetRealTime/SetRealTime/SetAlarmTime`), `OEMIoControl`,
+  platform (`OEMGetPlatformVersion`/`OEMPlatformVersion`/`OEMGetExtensionDRAM`), parallel
+  (`OEMParallelPortInit/GetByte/SendByte`,`NoPPFS`), `SerialInit`, power/idle (`OEMPowerOff`,
+  `OEMIdle`,`OEMNMI`,`OEMClearDebugCommError`), `SH4CacheLines`, `GInterruptList` table, per-source
+  ISR stubs (`DMAC0-3ISR`,`JTAGISR`,`Timer1ISR`), tick global `dwReschedTime` (resolve to KData).
+- **kernel stubs / missing files (6):** `CECompress/CEDecompress` (compile `compress.c`/`nocompr`),
+  `ModuleJit/InitializeJit/PKDInit` (JIT + kernel-dbg — stub for nknodbg), `SC_GetTickCount`.
+
+Next: minimal SH-4 CRT + the OAL stubs above, re-link to zero, then makeimg + wrap-image.ps1 → Flycast.
