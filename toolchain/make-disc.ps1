@@ -61,11 +61,13 @@ if ($mkisofs) {
   if (-not (Test-Path $iso)) { throw "mkisofs failed - no ISO produced." }
   Write-Host "ISO: $iso ($((Get-Item $iso).Length) bytes)"
   if ($Cdi) {
-    $cdi = Join-Path $OutDir "wince.cdi"
-    Remove-Item $cdi -EA SilentlyContinue
+    # NB: must not be named $cdi - case-insensitively collides with [switch]$Cdi
+    # and would coerce to a boolean, making cdi4dc write a file named "True".
+    $cdiOut = Join-Path $OutDir "wince.cdi"
+    Remove-Item $cdiOut -EA SilentlyContinue
     if ($cdi4dc) {
-      & $cdi4dc $iso $cdi | Out-Null         # cdi4dc floods progress; discard it
-      if (Test-Path $cdi) { Write-Host "CDI: $cdi ($((Get-Item $cdi).Length) bytes) -- load in Flycast." }
+      & $cdi4dc $iso $cdiOut | Out-Null       # cdi4dc floods progress; discard it
+      if (Test-Path $cdiOut) { Write-Host "CDI: $cdiOut ($((Get-Item $cdiOut).Length) bytes) -- load in Flycast." }
       else { Write-Warning "cdi4dc produced no CDI." }
     } else { Write-Warning "cdi4dc not found (img4dc). ISO built; convert it with cdi4dc." }
   }
