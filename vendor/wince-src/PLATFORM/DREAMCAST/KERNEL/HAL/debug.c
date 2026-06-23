@@ -1,13 +1,11 @@
 /*
- * dbgserial.c - Dreamcast OAL polled SCIF debug console.
+ * debug.c - Dreamcast debug serial console (replaces hal:asedbg:debug.obj).
  *
- * OURS (no shipped equivalent). The SDK kernel's OEMWriteDebug* route through the
- * Sega ASE BIOS / Debug Adapter (asedbg), NOT the UART. For first-boot bring-up
- * we want plain text out the SH-4 SCIF (the DC "serial"/coder's cable) with NO
- * KITL / WinDbg protocol - just polled, byte-at-a-time output a terminal can read.
- *
- * 8N1, default 57600 baud, internal clock (Pck = 50 MHz). Reference: SH7750
- * SCIF + KallistiOS dbgio/scif. See OAL-NOTES.md.
+ * OURS. The shipped kernel's OEMWriteDebug* routed through the Sega ASE BIOS /
+ * Debug Adapter (asedbg). We instead drive plain text out the SH-4 SCIF (the DC
+ * "serial"/coder's cable) with NO KITL/WinDbg - polled, byte-at-a-time, readable
+ * in a terminal. 8N1, default 57600, internal clock (Pck=50MHz). Ref: SH7750 SCIF
+ * + KallistiOS scif. See OAL-NOTES.md.
  */
 #include <windows.h>
 #include "dc_hw.h"
@@ -16,8 +14,6 @@
 #define DBG_SCIF_BAUD   57600
 #endif
 
-/* Initialise the SCIF for polled 8N1 output. No interrupts enabled (TIE/RIE off)
- * so this never collides with an interrupt-driven serial driver or KITL. */
 /* volatile so the compiler can't optimize the settle loop away */
 static void scif_delay(void)
 {
@@ -47,7 +43,6 @@ void OEMWriteDebugByte(BYTE ch)
     while ((VUINT16(SH4_SCFSR2) & SCFSR2_TDFE) == 0)     /* wait for FIFO space */
         ;
     VUINT8(SH4_SCFTDR2) = ch;
-    /* clear TDFE + TEND (write 0 to the status bits) so the next poll is fresh */
     VUINT16(SH4_SCFSR2) &= (USHORT)~(SCFSR2_TDFE | SCFSR2_TEND);
 }
 

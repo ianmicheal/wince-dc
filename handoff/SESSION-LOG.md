@@ -68,7 +68,7 @@ cached 0x8C000000) than the stripped CE 2.12 game runtime — toward a shell / m
     `fwinit`/`cfwkatan`/`fwkatana`/`ktimer`/`timer`/`rtc`/`oemioctl`/`isr`/`mdppfs`/`oemwdm`),
     `asedbg:*` (3 = SCIF KD, optional ❌). Next: Ghidra the SDK `nknodbg.exe` (SH-4, base
     `0x8C000000`) with its `.map`/`.pdb` as the spec; reconstruct `hal:*` into
-    `bsp/oal/dreamcast/`; link vs `nkmain.lib`. Detail in `docs/04` §"Next — the OAL gap".
+    `PLATFORM/DREAMCAST/KERNEL/HAL/`; link vs `nkmain.lib`. Detail in `docs/04` §"Next — the OAL gap".
 11. **OAL reversing — first pass done.** Fixed the Ghidra MCP transport (Python 3.14 has no
     `socket.AF_UNIX`; pinned `GHIDRA_MCP_URL=http://127.0.0.1:8089` in `C:\Dev\.mcp.json` →
     bridge uses TCP). Imported debug `nknodbg.exe` into Ghidra project `wce` (SH-4, base

@@ -20,20 +20,24 @@ tools + a real SH-4 PE compiler. This repo is **self-contained except the DC SDK
   -DWINCEMACRO` (gates `kfuncs.h`→PRIVATE `pkfuncs.h`/`mkfuncs.h`), not more headers — cleared
   all 35 errors at once and validated the 4 reconstructed constants (pkfuncs.h defines them
   identically). Driver: `build-nklib.bat`. Full detail in `docs/04-kernel-build.md`.
-- ✅ **From-source `nk.exe` LINKS (zero unresolved).** Reconstructed the Dreamcast OAL
-  (`NK\OAL\DREAMCAST\`: StartUp, OEMInit, INTC/TMU bring-up, polled SCIF console, RTC/platform/
-  ioctl/power, ISR + per-source stubs) from the shipped SDK kernel (reversed in Ghidra), plus a
-  minimal SH-4 CRT (`NK\CRT\SHX\`: mem/str/div/shift in C, soft-float stubbed) since the DC SDK
-  has no static libc. `build-nklib`+`build-oal`+`build-crt`+`build-nk` → `nk.exe` (SH-4 `0x1A6`,
-  entry StartUp, ~264 KB). Detail in `NK\OAL\DREAMCAST\OAL-NOTES.md`.
-- ✅ **Bootable disc built.** `nk.exe` → makeimg (romimage relocates our kernel to `8c010400`,
-  needs `/DEBUG /DEBUGTYPE:BOTH,FIXUP`) → `NK.bin` → `wrap-image.ps1` → `0winceos.bin` → `mkisofs`
-  (`-G ip_drago.bin` as IP.BIN) → `cdi4dc` → **`wince.cdi`** (Flycast-loadable). `make-disc.ps1`;
-  tools `c:\dev\cdrtools\mkisofs.exe` + `c:\dev\cdi4dc`. See `docs/05-disc-image.md`.
-- 🔄 **Make it actually boot.** The OAL/CRT are still bring-up stubs (fixed-time RTC,
-  `OEMIoControl`→FALSE, ISR/soft-float stubs) and the user modules are stock 2.12 (ABI-mismatched
-  with a 3.0 kernel). Next: load `wince.cdi` in Flycast, watch the SCIF console for our
-  `OEMWriteDebugString`/OEMInit output, and make stubs real per `OAL-NOTES.md` "Boot-readiness TODO".
+- ✅ **From-source `nk.exe` LINKS + the kernel BOOTS on Flycast.** Reconstructed the Dreamcast
+  HAL/OAL from the shipped SDK kernel (reversed in Ghidra) + a minimal SH-4 CRT (`NK\CRT\SHX\`).
+  The HAL now matches the PDB structure: `vendor\wince-src\PLATFORM\DREAMCAST\KERNEL\HAL\` =
+  `fwinit.{src,c}` (StartUp/OEMNMI/OEMIdle), `cfwkatan.c` (OEMInit/OEMInterrupt*/GInterruptList/
+  SerialInit/platform), `fwkatana.c`, `ktimer.c`/`timer.c`, `rtc.c`, `oemwdm.c`, `oemioctl.c`,
+  `isr.c` (KatanaISR2/4/6 + per-source), `mdppfs.c`, `debug.c` (SCIF console), `compress.c`,
+  `kdstub.c`. `build-nklib`+`build-oal`+`build-crt`+`build-nk` → `nk.exe`. See `…\HAL\OAL-NOTES.md`.
+- ✅ **Bootable disc + it RUNS.** `nk.exe` → makeimg → `wrap-image.ps1` → `0winceos.bin` →
+  **GDI** via `make-gdi.ps1` (Half-Life DC pipeline: `utils\buildgdi.exe` + HL-DC `ip.bin`) — the
+  working path; CDI via `make-disc.ps1` (mkisofs+cdi4dc) also works. On Flycast the kernel boots
+  through KernelRelocate → CE banner → MMU+cache → OEMInit ("Set 4 detected") → "Booting Windows
+  CE 3.00" → first thread. Two key fixes: Flycast's "SH-4 Kernel" MMU magic (`wrap-image.ps1` +
+  StartUp plant it at 0x10A8) and recovering `pTOC` from the ROM signature (romimage mis-patches
+  it). See `docs/05-disc-image.md` + SESSION-LOG.
+- 🔄 **Userland bring-up.** Now faults in `SC_GetOwnerProcess`/`GetKHeap` (TLB miss on slot-1
+  process memory) loading the first process — the 3.0-kernel / stock-2.12-module ABI wall. Next:
+  build the 3.0 user modules (`coredll`/`FSDMGR`/`DEVICE`/`GWES`, all in `vendor/wince-src`) so the
+  userland matches the kernel. Build with `[debug]` for verbose kernel output (`-DDEBUG`).
 
 ## Setup on a fresh PC
 1. `git clone <this repo>` — includes the leak source + SH toolchain under `vendor/`.
@@ -65,24 +69,25 @@ build-asm.bat    retail [file.src]     :: assemble one SHX shasm source (-cpu=SH
 - `bsp/` — Dreamcast BSP scaffold (`drivers/`, `inc/`, `files/`, …). The
   `inc/mem_shx_patch.h` reconstruction was removed once `-DWINCEOEM` made pkfuncs.h
   authoritative for the 4 SH-4 constants.
-- **OAL reconstruction** lives in the kernel tree (CE-native), `vendor/wince-src/PRIVATE/
-  WINCEOS/COREOS/NK/OAL/DREAMCAST/` — `startup.src`, `oeminit.c`, `timer.c`, `intr.c`,
-  `dc_hw.h`, `SOURCES`, `OAL-NOTES.md`. Built by `build-oal.bat` → `oal_dc.lib`. Reverse-
-  engineered from the shipped SDK kernel; NOT from the leak.
+- **HAL/OAL reconstruction** (CE PLATFORM tree, PDB-matched file/func names):
+  `vendor/wince-src/PLATFORM/DREAMCAST/KERNEL/HAL/` — `fwinit.{src,c}`, `cfwkatan.c`, `fwkatana.c`,
+  `ktimer.c`, `timer.c`, `rtc.c`, `oemwdm.c`, `oemioctl.c`, `isr.c`, `mdppfs.c`, `debug.c`,
+  `compress.c`, `kdstub.c`, `dc_hw.h`, `SOURCES`, `OAL-NOTES.md`. Built by `build-oal.bat` →
+  `oal_dc.lib`. Reverse-engineered from the shipped SDK kernel; NOT from the leak.
+  (CRT at `NK\CRT\SHX\` not yet renamed to fulllibc names — remaining refactor.)
 - `vendor/wince-src/` — leaked CE 3.0 source (WINCE300). `vendor/sh-toolchain/` — SH compiler + CE3 headers.
 - `reference/MANIFEST.md` — build artifacts + SHA-256 (binaries gitignored).
 - `handoff/` — `SESSION-LOG.md` (full history of how we got here) + `memory/` (the assistant's
   project memory). **Read `SESSION-LOG.md` first when resuming.**
 
 ## Next action
-Kernel core (`nkmain.lib`) and a first reconstructed DC OAL (`oal_dc.lib`: `startup.src`,
-`oeminit.c`, `timer.c`, `intr.c`) both build SH-4 clean. Next: finish the OAL to a LINKABLE
-`nk.exe` — (1) decode the `KatanaISR2/4` exact `SB_IST`→SYSINTR bit map + bind `Timer0ISR`'s
-tick to KData (see `OAL-NOTES.md` TODO), (2) add SCIF `OEMWriteDebugByte` for first-boot output,
-(3) link `nkmain.lib`+`oal_dc.lib` (EXEENTRY=StartUp, EXEBASE per `SHX\SOURCES`), resolving
-remaining externs, (4) wrap via makeimg + `wrap-image.ps1`, test Flycast/lxdream → HW. DC memory
-map: RAM phys `0x0C000000`/cached `0x8C000000`, RAMIMAGE `@8C010000`. Ghidra project `wce` has the
-SDK kernel annotated as the spec.
+The from-source kernel BOOTS on Flycast (banner → MMU → OEMInit → first thread) and now faults in
+`SC_GetOwnerProcess`/`GetKHeap` loading the first process — the 3.0-kernel / stock-2.12-module ABI
+wall. Build/test loop: `build-nklib`+`build-oal`+`build-crt`+`build-nk` `debug` → swap our `nk.exe`
+in for `nknodbg.exe`, `build-image retail` → `wrap-image.ps1` → `make-gdi.ps1` → load
+`reference\disc-gdi\disc.gdi` in Flycast (serial console on). Next phase: build the 3.0 user-mode
+modules (`coredll`/`FSDMGR`/`DEVICE`/`GWES` — all in `vendor/wince-src`) so userland matches the
+kernel, instead of the stock 2.12 modules. Ghidra project `wce` has the SDK kernel as the spec.
 
 ## Conventions
 - Batch `rem` lines must be plain ASCII — no `>` or em-dash (cmd treats `>` as redirection).

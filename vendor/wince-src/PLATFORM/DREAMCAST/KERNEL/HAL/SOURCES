@@ -1,0 +1,22 @@
+# Reconstructed Dreamcast (Katana) HAL/OAL for CE 3.0 SH-4.
+# File + function names match the shipped kernel PDB (hal:* objects).
+# Build driver: toolchain\build-oal.bat. NOT from the leak.
+TARGETNAME=oal_dc
+TARGETTYPE=LIBRARY
+WINCECPU=1
+
+SOURCES= \
+    fwinit.src  \
+    fwinit.c    \
+    cfwkatan.c  \
+    fwkatana.c  \
+    ktimer.c    \
+    timer.c     \
+    rtc.c       \
+    oemwdm.c    \
+    oemioctl.c  \
+    isr.c       \
+    mdppfs.c    \
+    debug.c     \
+    compress.c  \
+    kdstub.c

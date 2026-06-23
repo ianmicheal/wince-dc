@@ -12,7 +12,7 @@ setlocal enabledelayedexpansion
 call "%~dp0setenv.bat" %1
 
 set NK=%WINCESRC%\PRIVATE\WINCEOS\COREOS\NK
-set OAL=%NK%\OAL\DREAMCAST
+set OAL=%WINCESRC%\PLATFORM\DREAMCAST\KERNEL\HAL
 set OUTDIR=%~dp0..\reference\kernel-obj
 if not exist "%OUTDIR%" mkdir "%OUTDIR%"
 
@@ -22,14 +22,16 @@ set INCLUDE=%OAL%;%NK%\INC;%NK%\KERNEL\SHX;%NK%\..\CORE\INC;%GWESLAB%\ce3-oak\IN
 set KDEFS=-DSH4=1 -DSHx=1 -DUNDER_CE=300 -D_WIN32_WCE=300 -DUNICODE -D_UNICODE -DKERNEL -DWINCEOEM=1 -DWINCEMACRO -DIN_KERNEL -DDBGSUPPORT
 if /I "%BLDTYPE%"=="debug" set KDEFS=%KDEFS% -DDEBUG
 
-set CSRC=oeminit timer intr dbgserial platform rtc power serial oemioctl kstubs
+rem HAL objects, PDB-matched: fwinit/cfwkatan/fwkatana/ktimer/timer/rtc/oemwdm/
+rem oemioctl/isr/mdppfs + debug (SCIF console) + compress/kdstub (kernel stubs).
+set CSRC=fwinit cfwkatan fwkatana ktimer timer rtc oemwdm oemioctl isr mdppfs debug compress kdstub
 set OBJS=
 set FAILED=0
 
-echo === assembling OAL startup ===
+echo === assembling fwinit (StartUp) ===
 set INCLUDE=%NK%\INC;%NK%\KERNEL\SHX;%GWESLAB%\ce3-oak\INC;%CE3SDK%
-shasm.exe -cpu=SH4 -DSH_CPU=64 -DSH4=1 -DSHx=1 -DCELOG=0 -nologo -object=%OUTDIR%\startup.obj "%OAL%\startup.src" >"%OUTDIR%\startup.err" 2>&1
-if errorlevel 1 (echo   FAIL startup.src & type "%OUTDIR%\startup.err" & set /a FAILED+=1) else (echo   ok   startup.src & set OBJS=!OBJS! "%OUTDIR%\startup.obj")
+shasm.exe -cpu=SH4 -DSH_CPU=64 -DSH4=1 -DSHx=1 -DCELOG=0 -nologo -object=%OUTDIR%\fwinit_asm.obj "%OAL%\fwinit.src" >"%OUTDIR%\fwinit_asm.err" 2>&1
+if errorlevel 1 (echo   FAIL fwinit.src & type "%OUTDIR%\fwinit_asm.err" & set /a FAILED+=1) else (echo   ok   fwinit.src & set OBJS=!OBJS! "%OUTDIR%\fwinit_asm.obj")
 
 echo === compiling OAL C ===
 set INCLUDE=%OAL%;%NK%\INC;%NK%\KERNEL\SHX;%NK%\..\CORE\INC;%GWESLAB%\ce3-oak\INC;%CE3SDK%
