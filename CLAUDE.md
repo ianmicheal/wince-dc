@@ -35,9 +35,15 @@ tools + a real SH-4 PE compiler. This repo is **self-contained except the DC SDK
   StartUp plant it at 0x10A8) and recovering `pTOC` from the ROM signature (romimage mis-patches
   it). See `docs/05-disc-image.md` + SESSION-LOG.
 - 🔄 **Userland bring-up.** Now faults in `SC_GetOwnerProcess`/`GetKHeap` (TLB miss on slot-1
-  process memory) loading the first process — the 3.0-kernel / stock-2.12-module ABI wall. Next:
-  build the 3.0 user modules (`coredll`/`FSDMGR`/`DEVICE`/`GWES`, all in `vendor/wince-src`) so the
-  userland matches the kernel. Build with `[debug]` for verbose kernel output (`-DDEBUG`).
+  process memory) loading the first process — the 3.0-kernel / stock-2.12-module ABI wall.
+  **Confirmed by struct-size diff** (`docs/06-userland-abi.md`, `toolchain/probe-abi.bat` vs the
+  shipped PDB): every cross-boundary surface is byte-identical — `KDataStruct` 896, `CPUCONTEXT`
+  228 + `ctx`@92, **`cinfo` (PSL) 20**, `_HDATA`/`o32_lite`/`openexe_t` — while the kernel-internal
+  `Process` (176 vs 156) / `Thread` (540 vs 324) differ only because we built the full 3.0 source
+  and Sega shipped an older 2.12 kernel (self-consistent; `ERRFALSE` asserts pass, it boots). So the
+  PSL ABI is stable → the **3.0 `coredll` thunks will be compatible with our kernel's dispatch**.
+  Next: build the 3.0 user modules (`coredll`/`FSDMGR`/`DEVICE`/`GWES`, all in `vendor/wince-src`)
+  so userland matches the kernel. Build with `[debug]` for verbose kernel output (`-DDEBUG`).
 
 ## Setup on a fresh PC
 1. `git clone <this repo>` — includes the leak source + SH toolchain under `vendor/`.
