@@ -47,10 +47,14 @@ typedef struct e32_rom {
     unsigned short  e32_subsysminor;/* The subsystem minor version number  */
     unsigned long   e32_stackmax;   /* Maximum stack size                  */
     unsigned long   e32_vsize;      /* Virtual size of the entire image    */
-    unsigned long	e32_sect14rva;  /* section 14 rva */
-    unsigned long	e32_sect14size; /* section 14 size */
+    unsigned short  e32_subsys;     /* The subsystem type (2.12 ROM layout)*/
     struct info     e32_unit[ROM_EXTRA]; /* Array of extra info units      */
-    unsigned short  e32_subsys;     /* The subsystem type                  */
+    /* NOTE: the CE 2.12 e32_rom (what the Dreamcast SDK romimage writes) has
+       e32_subsys at +24 and e32_unit at +28, total 100 bytes -- it has NO
+       e32_sect14rva/e32_sect14size (those were added in CE 3.0). Reading the
+       3.0 layout against a 2.12 module shifted e32_unit[] by 4 bytes, so
+       e32_unit[IMP] came out {0, RES.rva} instead of {0,0}, making DoImports
+       walk a phantom import table -> unhandled TLB miss loading coredll. */
 } e32_rom;
 
 typedef struct o32_rom {

@@ -34,27 +34,16 @@ tools + a real SH-4 PE compiler. This repo is **self-contained except the DC SDK
   CE 3.00" → first thread. Two key fixes: Flycast's "SH-4 Kernel" MMU magic (`wrap-image.ps1` +
   StartUp plant it at 0x10A8) and recovering `pTOC` from the ROM signature (romimage mis-patches
   it). See `docs/05-disc-image.md` + SESSION-LOG.
-- 🔄 **Userland bring-up.** Now faults in `SC_GetOwnerProcess`/`GetKHeap` (TLB miss on slot-1
-  process memory) loading the first process — the 3.0-kernel / stock-2.12-module ABI wall.
-  **Confirmed by struct-size diff** (`docs/06-userland-abi.md`, `toolchain/probe-abi.bat` vs the
-  shipped PDB): every cross-boundary surface is byte-identical — `KDataStruct` 896, `CPUCONTEXT`
-  228 + `ctx`@92, **`cinfo` (PSL) 20**, `_HDATA`/`o32_lite`/`openexe_t` — while the kernel-internal
-  `Process` (176 vs 156) / `Thread` (540 vs 324) differ only because we built the full 3.0 source
-  and Sega shipped an older 2.12 kernel (self-consistent; `ERRFALSE` asserts pass, it boots). So the
-  PSL ABI is stable → the **3.0 `coredll` thunks will be compatible with our kernel's dispatch**.
-  **coredll core BUILDS:** `coremain.lib` — the PSL core (`apis.c`/`cscode.c` syscall table,
-  `coredll.c`, `time`/`random`/`profiler`/`strings` + SHX `chandler`/`intrlock`), SH-4
-  (`build-coredll.bat`). Same `WINCEOEM` unlock as the kernel; user-mode flags (no `-DKERNEL`).
-  Localized winver.h into `resource.c` (was globally aggregated in `windows.h`, broke `profiler.c`).
-  ⚠️ **BLOCKER — the leak is kernel-focused; the userland CANNOT be rebuilt from it.** Only `NK`
-  (complete) + thin fragments: coredll = `dll`+`lmem` only (missing thunks/locale/corelibc/imm/sip/
-  fpemul/…); DEVICE = `LIB\` only; FSDMGR = 7 `.c`; **GWES has NO window/GDI source** (only
-  `MGDI\GPE\*.cpp`, the SW graphics primitives). So "build the 3.0 userland to match the kernel"
-  is not achievable. Combined with the ABI diff proving the PSL/`cinfo`/`KData`/`CONTEXT` ABI is
-  **byte-identical** (`docs/06`), the correct path is: **keep the stock 2.12 modules and debug the
-  kernel-side `SC_GetOwnerProcess`/`GetKHeap` TLB-miss directly** (slot-1 `0x03d50000`, first-process
-  load) against the Ghidra SDK kernel spec — it's a kernel loader/VM bug, not an ABI wall. Build with
-  `[debug]` for verbose kernel output (`-DDEBUG`).
+- 🔄 **Userland is BOOTING (2026-06-24).** The old "SC_GetOwnerProcess/GetKHeap" fault was really
+  a `DoImports` page-in fault from a **2.12-vs-3.0 `e32_rom` struct mismatch** — FIXED. Plus an API
+  method-table hole (`ProcMthds[4]`) — FIXED. Now **coredll + filesys load, filesys initialises +
+  `SignalStarted`s, and `RunApps` launches the 2nd process**, which is stuck on a cross-process
+  `PerformCallBack` (current frontier). Strategy DECIDED: **keep the stock 2.12 modules** (GWES has
+  no source, so the 3.0 userland can't be rebuilt — see `docs/06`); fix kernel-side 2.12/3.0 deltas
+  as they surface (on-disk module structs + API method numbering must match 2.12, verified via the
+  Ghidra SDK kernel). **Full detail + repeatable method + active DCDBG probes: `docs/07-userland-boot.md`.**
+  Emulator debug/WinDBG feasibility: `docs/08-emulator-debugging.md`. (`coremain.lib` from 3.0
+  source also builds via `build-coredll.bat`, but is NOT used — we keep stock coredll.)
 
 ## Setup on a fresh PC
 1. `git clone <this repo>` — includes the leak source + SH toolchain under `vendor/`.
@@ -99,14 +88,28 @@ build-asm.bat    retail [file.src]     :: assemble one SHX shasm source (-cpu=SH
 - `handoff/` — `SESSION-LOG.md` (full history of how we got here) + `memory/` (the assistant's
   project memory). **Read `SESSION-LOG.md` first when resuming.**
 
-## Next action
-The from-source kernel BOOTS on Flycast (banner → MMU → OEMInit → first thread) and now faults in
-`SC_GetOwnerProcess`/`GetKHeap` loading the first process — the 3.0-kernel / stock-2.12-module ABI
-wall. Build/test loop: `build-nklib`+`build-oal`+`build-crt`+`build-nk` `debug` → swap our `nk.exe`
-in for `nknodbg.exe`, `build-image retail` → `wrap-image.ps1` → `make-gdi.ps1` → load
-`reference\disc-gdi\disc.gdi` in Flycast (serial console on). Next phase: build the 3.0 user-mode
-modules (`coredll`/`FSDMGR`/`DEVICE`/`GWES` — all in `vendor/wince-src`) so userland matches the
-kernel, instead of the stock 2.12 modules. Ghidra project `wce` has the SDK kernel as the spec.
+## Next action  (updated 2026-06-24 — userland is now BOOTING; read `docs/07-userland-boot.md`)
+Big progress past the old "SC_GetOwnerProcess/GetKHeap" fault: that turned out to be a
+`DoImports` page-in fault from a **2.12-vs-3.0 `e32_rom` struct mismatch** (FIXED — `ROMLDR.H`
++ `loader.c`). With that + an API-table fix (`ProcMthds[4]=SC_ProcGetIndex`, FIXED), **coredll +
+filesys load, filesys fully initialises and `SignalStarted`s, and `RunApps` launches a 2nd
+process.** Decision REVERSED: do NOT try to rebuild the 3.0 userland (GWES has no source) — keep
+the stock 2.12 modules and fix kernel-side 2.12/3.0 deltas as they surface (the modules' on-disk
+structs + API method-table numbering must match 2.12; use Ghidra `get_struct_layout`/`read_memory`
+on the SDK kernel as the spec).
+
+**Current frontier:** the 2nd process (`p2`) is stuck on a cross-process `PerformCallBack`
+(`Wn32:113`); a `DCDBG CB p%d->p%d pfn` probe was just added — run `disc.gdi` in Flycast and read
+that line to localise. Full method, the two fixes, the active `DCDBG` probes (to strip later), and
+the Win32 method-number table are in **`docs/07-userland-boot.md`**. Emulator debug + WinDBG
+research (why `nkscifkd` garbles, Flycast SCIF is TX-only on Windows, no BBA) in
+**`docs/08-emulator-debugging.md`**.
+
+Build/test loop (retail): `build-nklib` (or `build-oal` if HAL changed) → `build-nk` → copy
+`reference\kernel-obj\nk.exe` over `C:\wcedreamcast\release\retail\nknodbg.exe` → `build-image
+retail` → `wrap-image.ps1 -Out reference\0winceos.ours.bin` → `make-gdi.ps1` → load
+`reference\disc-gdi\disc.gdi` in Flycast (SerialConsole on). NOTE: `nknodbg.exe` is currently OUR
+kernel (stock at `.stock`); `utils\ip.bin` = SDK `ip_drago.bin` (gitignored, recopy on clone).
 
 ## Conventions
 - Batch `rem` lines must be plain ASCII — no `>` or em-dash (cmd treats `>` as redirection).

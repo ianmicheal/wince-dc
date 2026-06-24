@@ -148,6 +148,32 @@ Built a bootable disc and iterated kernel bring-up on Flycast/lxdream:
 - Diagnostic method: raw-SCIF markers in StartUp/SH3Init/KernelRelocate (now removed; kernel
   prints its own messages). build-nk.bat adds /MAP + /DEBUGTYPE:FIXUP for romimage.
 
+## 2026-06-24 — USERLAND BOOTS (e32_rom + ProcMthds fixes) + emulator-debug research
+Drove from-source `nk.exe` past the first-process fault into real userland. Full detail in
+**`docs/07-userland-boot.md`**; emulator/WinDBG research in **`docs/08-emulator-debugging.md`**.
+- Wired the **Ghidra MCP** properly: `C:\dev\Dreamcast\.mcp.json` runs
+  `uv run --quiet C:\dev\ghidramcp\bridge_mcp_ghidra.py` with `GHIDRA_MCP_URL=http://127.0.0.1:8089`
+  (203 tools; project `wce` = SDK debug `nknodbg.exe`). Used `get_struct_layout`, `read_memory`,
+  `get_xrefs_to`, `decompile_function` as the authoritative 2.12 spec.
+- **The old "SC_GetOwnerProcess/GetKHeap TLB miss" was really `DoImports+0x54`** reading coredll's
+  import dir at the unmapped header page. Cause: **2.12 `e32_rom` ≠ 3.0** — 2.12 has `e32_subsys`
+  @+24 and `e32_unit[]` @+28 (100 B, NO sect14); 3.0 added sect14 → shifted `e32_unit[]` +4 →
+  `IMP` misread as `{0,0x31000}` instead of `{0,0}`. **FIXED** in `ROMLDR.H` + `loader.c:1701`
+  (KEEP). → coredll + filesys load.
+- Next fault: `APICall`→`ObjectCall` dispatch to PC=0. Probe found **`PROC` API method 4 = NULL**;
+  2.12 `ProcMthds[4]=SC_ProcGetIndex` (3.0 zeroed the slot; fn still in `kmisc.obj`). **FIXED**
+  `schedule.c ProcMthds[4]` (KEEP). → filesys fully inits, `RegisterAPISet`, `SignalStarted`,
+  enters its idle service loop; `RunApps` launches the **2nd process**.
+- **Frontier:** `p2` stuck on cross-process `PerformCallBack` (`Wn32:113`=`-1`); `SetCPUASID`
+  migrates the thread into the target proc. `DCDBG CB p%d->p%d pfn` probe added — run + read.
+- Timer confirmed firing (`[TMR]` heartbeat). Several `DCDBG` RETAILMSG probes remain in
+  loader.c/virtmem.c/schedule.c/OBJDISP.C/timer.c — **strip when stable** (the two FIXES are not debug).
+- **Emulator-debug research:** stock kernels can't log clean text in Flycast (`nk`/`nknodbg`→DA=silent;
+  `nkscifkd`→KD-protocol garbage). Flycast Windows `SerialConsole` is **TX-only** (RX guarded to
+  POSIX) so WinDBG can't attach as-is. No BBA driver in the SDK (modem/PPP only). Paths: (A) patch a
+  kernel's `OEMWriteDebugByte`→SCIF for clean logging; (B) ~50-line Flycast patch to bridge SCIF↔TCP
+  (bidirectional) → `nkscifkd` + WinDBG = real symbolic kernel debugging in the emulator.
+
 ## Key facts to keep handy
 - Image base: RAMIMAGE @ `8C010000` (cached) = phys `0C010000`. Wrapper len pads to `0x800`.
 - `ce.bib` pulls the kernel as `nk.exe` FROM `nknodbg.exe`. 28 other modules stay stock 2.12.
