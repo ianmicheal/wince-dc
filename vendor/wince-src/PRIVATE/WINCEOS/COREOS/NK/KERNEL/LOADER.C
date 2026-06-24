@@ -1500,6 +1500,9 @@ DWORD DoImports(e32_lite *eptr, o32_lite *oarry, ulong BaseAddr, ulong BaseAdj) 
 	if (!(blocksize = eptr->e32_unit[IMP].size)) // No relocations
 		return 0;
 	blockstart = blockptr = (struct ImpHdr *)(BaseAddr+eptr->e32_unit[IMP].rva);
+	RETAILMSG(1,(TEXT("DCDBG DoImp base=%8.8lx imp.rva=%8.8lx imp.sz=%8.8lx oc=%d s0ra=%8.8lx s0rva=%8.8lx s0vs=%8.8lx\r\n"),
+		BaseAddr, eptr->e32_unit[IMP].rva, eptr->e32_unit[IMP].size, eptr->e32_objcnt,
+		oarry[0].o32_realaddr, oarry[0].o32_rva, oarry[0].o32_vsize));
 	while (blockptr->imp_lookup) {
 		KAsciiToUnicode(ucptr,(LPCHAR)BaseAddr+blockptr->imp_dllname,MAX_DLLNAME_LEN);
 		pMod = LoadOneLibraryPart2(ucptr,1,0);
@@ -1695,8 +1698,8 @@ top:
 		eptr->e32_stackmax = e32rptr->e32_stackmax;
 		memcpy(&eptr->e32_unit[0],&e32rptr->e32_unit[0],
 			sizeof(struct info)*LITE_EXTRA);
-		eptr->e32_sect14rva = e32rptr->e32_sect14rva;
-		eptr->e32_sect14size = e32rptr->e32_sect14size;
+		eptr->e32_sect14rva = 0;	/* 2.12 ROM e32 has no sect14 fields */
+		eptr->e32_sect14size = 0;
 		return 0;
 	}
 	if (*(LPDWORD)e32ptr->e32_magic != 0x4550)
@@ -2099,6 +2102,11 @@ int PageInModule(PMODULE pMod, DWORD addr) {
 	}
 	if (loop == eptr->e32_objcnt) {
 		DEBUGMSG(ZONE_PAGING,(L"     Could not find section to page in!\r\n"));
+		RETAILMSG(1,(TEXT("DCDBG PIM-NF z=%8.8lx oc=%d s0[%8.8lx..%8.8lx) s1.ra=%8.8lx sLast.ra=%8.8lx\r\n"),
+			zaddr, eptr->e32_objcnt,
+			ZeroPtr(oarry[0].o32_realaddr), ZeroPtr(oarry[0].o32_realaddr)+oarry[0].o32_vsize,
+			eptr->e32_objcnt>1?oarry[1].o32_realaddr:0,
+			oarry[eptr->e32_objcnt-1].o32_realaddr));
 		retval = 0;
 	}
 	DEBUGMSG(ZONE_PAGING && !retval,(L"PIM: Failure!\r\n"));

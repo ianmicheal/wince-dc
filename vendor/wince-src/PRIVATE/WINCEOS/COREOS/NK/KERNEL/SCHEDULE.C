@@ -144,12 +144,13 @@ const PFNVOID ThrdMthds[] = {
 	(PFNVOID)SC_CeSetThreadQuantum,
 };
 
+ulong SC_ProcGetIndex(HANDLE hProc);	/* restored for CE 2.12 coredll (PROC method 4) */
 const PFNVOID ProcMthds[] = {
 	(PFNVOID)SC_ProcCloseHandle,
 	(PFNVOID)0,
 	(PFNVOID)SC_ProcTerminate,
 	(PFNVOID)SC_ProcGetCode,
-	(PFNVOID)0,
+	(PFNVOID)SC_ProcGetIndex,	/* method 4: restored for CE 2.12 coredll compat (3.0 had 0) */
 	(PFNVOID)SC_ProcFlushICache,
 	(PFNVOID)SC_ProcReadMemory,
 	(PFNVOID)SC_ProcWriteMemory,
@@ -4834,6 +4835,7 @@ void SystemStartupFunc(ulong param) {
     }
 	if (first != last) {
 		base = (DWORD)VirtualAlloc((LPVOID)first,last-first,MEM_RESERVE|MEM_IMAGE, PAGE_NOACCESS);
+		RETAILMSG(1,(TEXT("DCDBG DLLrgn first=%8.8lx last=%8.8lx base=%8.8lx Z=%8.8lx\r\n"),first,last,base,ZeroPtr(base)));
 		DEBUGCHK(ZeroPtr(base) == first);
 		DllLoadBase = ZeroPtr(base);
 	} else {

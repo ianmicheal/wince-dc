@@ -822,11 +822,18 @@ RETADDR ObjectCall(int *pMode, RETADDR ra, void *args, long iMethod)
         DEBUGCHK(0);    /* shouldn't get here */
     }
 
+    /* DCDBG: per-call API trace for non-kernel procs (filesys=1+) to find the
+       last call before the init hang. procnum 0 = NK.EXE (skipped, noisy). */
+    if (pCurProc->procnum)
+        RETAILMSG(1,(TEXT("OC p%d %.4a:%d\r\n"), pCurProc->procnum, pci->acName, iMethod));
+
     /* Dispatch api call based upon the dispatch type in the cinfo struct. */
 	switch (pci->disp) {
 	case DISPATCH_KERNEL_PSL:
     case DISPATCH_I_KPSL:
         pfn = pci->ppfnMethods[iMethod];
+        if (!pfn) RETAILMSG(1,(TEXT("DCDBG OC-NULL '%.4a' inx=%d disp=%d iM=%d/%d ppfn=%8.8lx ra=%8.8lx\r\n"),
+                pci->acName, inx, pci->disp, iMethod, pci->cMethods, pci->ppfnMethods, ra));
         if ((pfn == (PFNVOID)-1) || (pfn == (PFNVOID)-2)) {
             /* PerformCallBack() or PerformCallForward() kernel API call.
              * Save the previous process and scan the CALLSTACKs to find
@@ -853,6 +860,8 @@ RETADDR ObjectCall(int *pMode, RETADDR ra, void *args, long iMethod)
                 RaiseException(STATUS_INVALID_PARAMETER, EXCEPTION_NONCONTINUABLE, 0, 0);
                 DEBUGCHK(0);    /* shouldn't get here */
             }
+            RETAILMSG(1,(TEXT("DCDBG CB p%d->p%d pfn=%8.8lx kpsl=%d\r\n"),
+                pCurProc->procnum, pprc->procnum, (DWORD)pfn, (pci->ppfnMethods[iMethod]==(PFNVOID)-1)));
         	/* Save previous process */
             pcstk->pprcLast = pth->pProc;
 

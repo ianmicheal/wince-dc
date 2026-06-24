@@ -1695,6 +1695,19 @@ retryPagein:
 	LeaveCriticalSection(&VAcs);
 FailPageInNoCS:
 	DEBUGMSG(ZONE_PAGING, (TEXT("ProcessPageFault returning: %a\r\n"), bRet?"TRUE":"FALSE"));
+	/* DCDBG: on failure, dump the block's pager/access/page state for the faulting VA */
+	if (!bRet) {
+		PSECTION ps = (ixSect<=SECTION_MASK)?SectionTable[ixSect]:0;
+		MEMBLOCK *mb = (ps && ps!=NULL_SECTION)?(*ps)[ixBlock]:0;
+		BOOL real = (mb && mb!=NULL_BLOCK && mb!=RESERVED_BLOCK);
+		RETAILMSG(1,(TEXT("PPF-FAIL a=%8.8lx s=%d B=%8.8lx fl=%8.8lx pgr=%d alk=%8.8lx ak=%8.8lx aP=%8.8lx acc=%d\r\n"),
+			addr, ixSect, (DWORD)mb,
+			real?mb->flags:0xFFFFFFFF,
+			real?(mb->flags & MB_FLAG_PAGER_TYPE):-1,
+			real?mb->alk:0xFFFFFFFF, CurAKey,
+			real?mb->aPages[ixPage]:0xFFFFFFFF,
+			real?TestAccess(&mb->alk,&CurAKey):-1));
+	}
 	return bRet;
 }
 

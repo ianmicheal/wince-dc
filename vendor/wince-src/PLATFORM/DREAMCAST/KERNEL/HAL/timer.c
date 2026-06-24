@@ -17,6 +17,10 @@ extern volatile DWORD dwReschedTime;    /* preemption accumulator (ktimer.c) */
 ULONG Timer0ISR(void)
 {
     USHORT tcr;
+    extern void OEMWriteDebugString(LPCWSTR);
+    static DWORD dctick = 0;
+    if ((dctick++ & 0x3F) == 0)             /* DCDBG: heartbeat every 64 ticks (~1.6s) */
+        OEMWriteDebugString(L"[TMR]\r\n");
 
     /* Ack underflow: clear UNF (bit 8) in TCR0, poll until it stays clear. */
     tcr = VUINT16(SH4_TMU_TCR0);
