@@ -14,7 +14,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
     WCHAR      s[16];
     DWORD      key;
 
-    w = DCWinOpen(70, 300, CW, CH, L"Clock");
+    w = DCWinOpen(70, 300, CW, CH, L"Clock", ICON_CLOCK);
     if (!w) { OutputDebugStringW(L"DCWCLOCK: DCWinOpen failed\r\n"); return 1; }
 
     for (;;)

@@ -61,23 +61,24 @@ typedef struct
     const WCHAR *label;
     const WCHAR *path;     // explorer path, or NULL
     const WCHAR *exe;      // app to launch, or NULL
+    int          icon;     // ICON_*
 } SHORTCUT;
 
 static const SHORTCUT s_desk[] =
 {
-    { L"My Dreamcast", L"\\",        NULL },
-    { L"CD-ROM",       L"\\CD-ROM",  NULL },
-    { L"Calculator",   NULL,         L"dcwcalc.exe" },
-    { L"Clock",        NULL,         L"dcwclock.exe" },
+    { L"My Dreamcast", L"\\",        NULL,           ICON_COMPUTER },
+    { L"CD-ROM",       L"\\CD-ROM",  NULL,           ICON_DRIVE },
+    { L"Calculator",   NULL,         L"dcwcalc.exe", ICON_APP },
+    { L"Clock",        NULL,         L"dcwclock.exe",ICON_CLOCK },
 };
 #define DESK_N (sizeof(s_desk) / sizeof(s_desk[0]))
 
 static const SHORTCUT s_start[] =
 {
-    { L"My Dreamcast", L"\\",        NULL },
-    { L"Windows",      L"\\Windows", NULL },
-    { L"CD-ROM",       L"\\CD-ROM",  NULL },
-    { L"Shut Down...", NULL,         NULL },
+    { L"My Dreamcast", L"\\",        NULL, ICON_COMPUTER },
+    { L"Windows",      L"\\Windows", NULL, ICON_FOLDER },
+    { L"CD-ROM",       L"\\CD-ROM",  NULL, ICON_DRIVE },
+    { L"Shut Down...", NULL,         NULL, ICON_FILE },
 };
 #define START_N (sizeof(s_start) / sizeof(s_start[0]))
 #define MENU_W  168
@@ -280,11 +281,11 @@ static void OpenExplorer(const WCHAR *path)
 //
 // Rendering - PASS 1 = COLORFILL/bevel, PASS 2 = text (no fills while DC locked).
 //
-static COLORREF IconColor(const ENTRY *e)
+static int FileIcon(const ENTRY *e)
 {
-    if (IsDir(e))               return RGB(240, 208, 96);   // folder
-    if (EndsWithExe(e->name))   return RGB(72, 112, 216);   // app
-    return RGB(208, 208, 208);                              // file
+    if (IsDir(e))             return ICON_FOLDER;
+    if (EndsWithExe(e->name)) return ICON_APP;
+    return ICON_FILE;
 }
 
 static void RenderTaskbarFills(void)
@@ -306,6 +307,7 @@ static void RenderTaskbarFills(void)
             SetRect(&rc, bx, TASK_Y + 3, bx + 110, SCREEN_H - 3);
             GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE);
             GfxBevel(&rc, (k == s_focus) ? FALSE : TRUE);
+            GfxIcon((int)s_shared->win[k].icon, bx + 4, TASK_Y + 6);
             bx += 116;
         }
     }
@@ -313,10 +315,13 @@ static void RenderTaskbarFills(void)
     if (s_menuOpen)
     {
         int h = (int)START_N * ROW_H + 8;
+        int my = TASK_Y - h + 4, i;
         SetRect(&rc, 4, TASK_Y - h, 4 + MENU_W, TASK_Y);
         GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE); GfxBevel(&rc, TRUE);
         if (s_menuSel >= 0 && s_menuSel < (int)START_N)
-            GfxFill(8, TASK_Y - h + 4 + s_menuSel * ROW_H, MENU_W, TASK_Y - h + 4 + (s_menuSel + 1) * ROW_H, CL_SEL);
+            GfxFill(8, my + s_menuSel * ROW_H, MENU_W, my + (s_menuSel + 1) * ROW_H, CL_SEL);
+        for (i = 0; i < (int)START_N; i++)
+            GfxIcon(s_start[i].icon, 10, my + i * ROW_H + 1);
     }
 }
 
@@ -330,8 +335,7 @@ static void RenderDesktopFills(void)
         y = 24 + i * 76;
         if (i == s_deskSel && !s_menuOpen)
             GfxFill(14, y + 36, 110, y + 52, CL_TITLE);     // label highlight
-        GfxFill(40, y, 72, y + 32, RGB(208, 208, 208));     // icon body
-        { RECT ic; SetRect(&ic, 40, y, 72, y + 32); GfxBevel(&ic, TRUE); }
+        GfxIconBig(s_desk[i].icon, 46, y);                  // 32x32 icon
     }
 }
 
@@ -359,7 +363,7 @@ static void RenderExplorerFills(void)
         y = LIST_TOP + (i - s_top) * ROW_H;
         if (i == s_sel && !s_menuOpen)
             GfxFill(2, y, SCREEN_W - 2, y + ROW_H, CL_SEL);
-        GfxFill(6, y + 2, 20, y + 15, IconColor(&s_ent[i]));
+        GfxIcon(FileIcon(&s_ent[i]), 5, y + 1);
     }
 
     GfxFill(0, STATUS_Y, SCREEN_W, TASK_Y, CL_FACE);
@@ -440,7 +444,7 @@ static void RenderText(HDC hdc)
         {
             if (!s_shared->win[k].inUse)
                 continue;
-            GfxText(hdc, bx + 6, TASK_Y + 5, CL_TEXT, CL_FACE, g_FontUI, s_shared->win[k].title);
+            GfxText(hdc, bx + 24, TASK_Y + 5, CL_TEXT, CL_FACE, g_FontUI, s_shared->win[k].title);
             bx += 116;
         }
     }
@@ -453,7 +457,7 @@ static void RenderText(HDC hdc)
         {
             COLORREF fg = (i == s_menuSel) ? CL_WHITE : CL_TEXT;
             COLORREF bg = (i == s_menuSel) ? CL_SEL : CL_FACE;
-            GfxText(hdc, 12, my + i * ROW_H + 1, fg, bg, g_FontUI, s_start[i].label);
+            GfxText(hdc, 30, my + i * ROW_H + 1, fg, bg, g_FontUI, s_start[i].label);
         }
     }
 }
@@ -467,6 +471,7 @@ static void DrawWinFills(DcWindow *w, BOOL active)
     GfxFill(fr.left, fr.top, fr.right, fr.bottom, CL_FACE);
     GfxBevel(&fr, TRUE);
     GfxFill(w->x - 2, w->y - 18, w->x + w->w + 2, w->y - 2, active ? CL_TITLE : RGB(112,112,112));
+    GfxIcon((int)w->icon, w->x, w->y - 18);                                    // title-bar icon
     GfxFill(w->x + w->w - 14, w->y - 16, w->x + w->w + 1, w->y - 3, CL_FACE);  // close box
     { RECT cb; SetRect(&cb, w->x + w->w - 14, w->y - 16, w->x + w->w + 1, w->y - 3); GfxBevel(&cb, TRUE); }
 
@@ -475,6 +480,8 @@ static void DrawWinFills(DcWindow *w, BOOL active)
         DcCmd *c = &w->cmd[i];
         if (c->op == DCOP_FILL)
             GfxFill(w->x + c->x, w->y + c->y, w->x + c->x + c->w, w->y + c->y + c->h, c->color);
+        else if (c->op == DCOP_ICON)
+            GfxIcon((int)c->color, w->x + c->x, w->y + c->y);
     }
 }
 
@@ -482,7 +489,7 @@ static void DrawWinText(HDC hdc, DcWindow *w, BOOL active)
 {
     int i;
 
-    GfxText(hdc, w->x, w->y - 16, CL_WHITE, active ? CL_TITLE : RGB(112,112,112), g_FontBold, w->title);
+    GfxText(hdc, w->x + 18, w->y - 16, CL_WHITE, active ? CL_TITLE : RGB(112,112,112), g_FontBold, w->title);
     GfxText(hdc, w->x + w->w - 11, w->y - 16, CL_TEXT, CL_FACE, g_FontUI, L"X");
     for (i = 0; i < (int)w->cmdCount && i < DCWIN_MAXCMD; i++)
     {

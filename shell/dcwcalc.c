@@ -37,6 +37,7 @@ static void Draw(DCWin *w)
     DCWinText(w, 12, 13, RGB(0, 0, 0), RGB(255, 255, 255), g_disp);
     DCWinText(w, 10, 48, RGB(0, 0, 0), RGB(192, 192, 192), L"0-9 enter digits");
     DCWinText(w, 10, 64, RGB(0, 0, 0), RGB(192, 192, 192), L"C clears, Esc closes");
+    DCWinIcon(w, CW - 24, 48, ICON_APP);            // client-drawn icon (DCOP_ICON)
     DCWinEndFrame(w);
 }
 
@@ -45,7 +46,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
     DCWin *w;
     DWORD  key;
 
-    w = DCWinOpen(210, 120, CW, CH, L"Calculator");
+    w = DCWinOpen(210, 120, CW, CH, L"Calculator", ICON_APP);
     if (!w) { OutputDebugStringW(L"DCWCALC: DCWinOpen failed\r\n"); return 1; }
     Draw(w);
 

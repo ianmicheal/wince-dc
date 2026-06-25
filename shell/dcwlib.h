@@ -22,10 +22,11 @@
 
 typedef struct DCWin DCWin;
 
-DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title);  // NULL on failure
+DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title, int iconId);  // NULL on failure
 void   DCWinBeginFrame(DCWin *win);
 void   DCWinFill(DCWin *win, int x, int y, int w, int h, COLORREF color);
 void   DCWinText(DCWin *win, int x, int y, COLORREF fg, COLORREF bg, const WCHAR *text);
+void   DCWinIcon(DCWin *win, int x, int y, int iconId);
 void   DCWinEndFrame(DCWin *win);          // publishes the frame atomically
 int    DCWinPollKey(DCWin *win, DWORD *key);   // returns 1 and a VK if one was queued
 int    DCWinShouldClose(DCWin *win);       // shell asked us to close

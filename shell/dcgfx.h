@@ -12,6 +12,7 @@
 
 #define CINTERFACE
 #include <windows.h>
+#include "dcwin.h"     // ICON_* ids (shared with the compositor protocol)
 
 #define SCREEN_W 640
 #define SCREEN_H 480
@@ -38,6 +39,13 @@ void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const 
 // the visible screen always shows the last full frame.
 //
 void GfxPresent(void);
+
+//
+// 16x16 color-keyed icons (built from embedded art into DDraw surfaces). Blit in
+// the fills pass (it's a Blt, not GDI). Ids are shared with the DCOP_ICON command.
+//
+void GfxIcon(int id, int x, int y);      // 16x16
+void GfxIconBig(int id, int x, int y);   // 32x32
 
 //
 // Launch an app: hand the exclusive display off, wait for it, reclaim it.

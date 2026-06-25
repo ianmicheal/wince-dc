@@ -19,6 +19,16 @@
 #define DCOP_NONE  0
 #define DCOP_FILL  1   // x,y,w,h + color
 #define DCOP_TEXT  2   // x,y + color (fg) + color2 (bg) + text
+#define DCOP_ICON  3   // x,y + color = icon id (ICON_* below)
+
+// shell icon ids (shared so clients can reference them via DCOP_ICON / DCWinIcon)
+#define ICON_COMPUTER  0
+#define ICON_DRIVE     1
+#define ICON_FOLDER    2
+#define ICON_APP       3
+#define ICON_CLOCK     4
+#define ICON_FILE      5
+#define ICON_COUNT     6
 
 typedef struct
 {
@@ -41,6 +51,7 @@ typedef struct
     DWORD ownerPid;
     LONG  x, y, w, h;       // client-area position + size on the desktop
     WCHAR title[40];
+    DWORD icon;             // ICON_* for the title bar / taskbar
     DWORD wantClose;        // shell -> client: please close
     DWORD gen;              // client bumps after writing a full frame of commands
     DWORD cmdCount;

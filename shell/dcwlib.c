@@ -15,7 +15,7 @@ struct DCWin
 
 static struct DCWin g_win;   // single window per client process
 
-DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title)
+DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title, int iconId)
 {
     int i, idx = -1, tries;
 
@@ -41,6 +41,7 @@ DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title)
     g_win.w->ownerPid = GetCurrentProcessId();
     g_win.w->x = x; g_win.w->y = y; g_win.w->w = w; g_win.w->h = h;
     lstrcpyW(g_win.w->title, title);
+    g_win.w->icon     = (DWORD)iconId;
     g_win.w->cmdCount = 0;
     g_win.w->gen      = 1;
     g_win.buildN      = 0;
@@ -73,6 +74,15 @@ void DCWinText(DCWin *win, int x, int y, COLORREF fg, COLORREF bg, const WCHAR *
     for (k = 0; k < 39 && text[k]; k++)
         c->text[k] = text[k];
     c->text[k] = 0;
+}
+
+void DCWinIcon(DCWin *win, int x, int y, int iconId)
+{
+    DcCmd *c;
+    if (win->buildN >= DCWIN_MAXCMD)
+        return;
+    c = &win->build[win->buildN++];
+    c->op = DCOP_ICON; c->x = x; c->y = y; c->color = (DWORD)iconId;
 }
 
 void DCWinEndFrame(DCWin *win)
