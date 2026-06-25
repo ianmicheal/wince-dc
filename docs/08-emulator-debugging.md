@@ -52,6 +52,35 @@ This is exactly our `PLATFORM\DREAMCAST\KERNEL\HAL\debug.c` `OEMWriteDebugByte` 
   makeimg. Gives readable stock-kernel boot logs in Flycast.
 - For **our** kernel: already done (clean SCIF). This is what we use today.
 
+### A′. ★ The no-KD `nkscifkd` patch (DONE 2026-06-25 — this is what we use to log the stock userland)
+`nkscifkd` is the *best* base for Flycast logging: unlike `nknodbg` (retail = debug strings
+compiled out, DA transport → silent) it has **all** the `DEBUGMSG`/`RETAILMSG` strings AND a
+working SCIF text writer. Its only problem is that `KdInit` hijacks the debug-print pointer to the
+KD packet transport and blocks waiting for WinDBG. Verified call graph (Ghidra, debug build):
+- `OutputDebugStringW` (`printf.obj`) always calls `(*lpWriteDebugStringFunc)(str)`; **its static
+  default is `OEMWriteDebugString`** (raw SCIF: poll `SCFSR2.TDFE`, write `SCFTDR2`). A *separate*
+  first block packages the string as a KD `DEBUG_IO` event and does `SC_WaitForMultiple(…,INFINITE)`
+  — the **hang** — but it is gated on the KD-active KData flag.
+- `KernelInit2` calls `KdInit`; **iff `KdInit` returns nonzero** it installs `KdpTrap`, sets
+  `KdDebuggerEnabled`/`fDbgConnected=1`, and (serial transport) overwrites
+  `lpWriteDebugStringFunc = KdpPrintString` → the **garble**.
+
+**Fix: make `KdInit` return 0.** Then `KernelInit2` skips the whole KD-install block:
+`lpWriteDebugStringFunc` stays = `OEMWriteDebugString` (raw text), the KData flag stays 0 so the
+INFINITE-wait block is skipped, and `KdpTrap` is never installed (faults print + reboot — visible).
+We still get the `"Entering KdInit…"`/`"KdInit Done…"` markers, raw.
+
+Recipe (retail build — match the retail modules; debug build only for the RE):
+```
+KdInit:  retail VA 0x8c01d788  (map: 0001:0001c788 _KdInit, kd:kdinit.obj)
+file off 0x1CB88  (.text VA 0x1000 @ raw 0x400  =>  RVA 0x1d788 - 0x1000 + 0x400)
+patch first 6 bytes:  86 2F 96 2F A6 2F  ->  00 E0 0B 00 09 00   ; mov #0,r0 ; rts ; nop
+```
+Working copy: `reference\kernel-obj\nkscifkd.nokd.exe`. To boot it, copy over the `nk.exe` bib slot
+(`release\retail\nknodbg.exe`; stock kept at `nknodbg.exe.stock`) → `build-image` → wrap → gdi →
+Flycast with `Debug.SerialConsoleEnabled` (TX shows in the AllocConsole stdout window).
+SH-4 LE bytes: `mov #imm,Rn`=`E0nn imm`→`00 E0`; `rts`=`000B`→`0B 00`; `nop`=`0009`→`09 00`.
+
 ### B. WinDBG in Flycast (powerful — symbolic kernel debugging, ~50 lines of Flycast)
 `nkscifkd.exe` already speaks KD over SCIF; the only Windows gap is a **bidirectional** SCIF
 endpoint. Implement a `SerialPort::Pipe` subclass over a **TCP socket** (or named pipe) and

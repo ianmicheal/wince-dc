@@ -29,22 +29,30 @@ not the CE3 leak headers). Links `coredll.lib` + `corelibc.lib` (the latter has
 `WinMainCRTStartup`). Verified: links clean, 0 unresolved.
 
 ## Wire it into a bootable image
-Test on the **stock kernel** (it boots fully today; our from-source `nk.exe` is still mid-bring-up).
-First restore the stock kernel if needed: copy `C:\wcedreamcast\release\retail\nknodbg.exe.stock`
-back over `nknodbg.exe`. Then:
-1. Copy `reference\shell-obj\dcshell.exe` → `C:\wcedreamcast\release\retail\OS\dcshell.exe`.
-2. Add a MODULES line to a `.bib` (e.g. `release\retail\gemini.bib`):
-   ```
-   dcshell.exe   $(_FLATRELEASEDIR)$(RELEASEDIR_OS)dcshell.exe   NK  SH
-   ```
-3. Launch it at boot — add to `[HKEY_LOCAL_MACHINE\init]` in `release\retail\gemini.reg`:
-   ```
-   "Launch90"="dcshell.exe"
-   "Depend90"=hex:1e,00          ; depend on gwes (0x1e=30) so windowing is up first
-   ```
-   (Or replace the title that `sysstart` launches, to make dcshell the foreground app.)
-4. `toolchain\build-image.bat retail` → `wrap-image.ps1` → `make-gdi.ps1` → load
-   `reference\disc-gdi\disc.gdi` in Flycast (SerialConsole on).
+Test on a **stock 2.12 kernel** (boots fully; our from-source `nk.exe` is still mid-bring-up). For
+*debuggable* boots use the **no-KD `nkscifkd`** (`reference\kernel-obj\nkscifkd.nokd.exe`, raw SCIF
+text — see `../docs/08` §A′); for a clean run use `nknodbg.exe.stock`. Copy the chosen kernel over
+`C:\wcedreamcast\release\retail\nknodbg.exe` (the `nk.exe` bib slot).
+
+**Build-system gotcha (important):** `makeimg` *regenerates* `ce.bib` and `reginit.ini` every run by
+merging the `IF`-guarded **sources** (`platform.bib`, `gemini.reg`, …) under the IMG/INIT env vars in
+`toolchain\setenv.bat`. So editing `ce.bib` directly is futile (it gets overwritten) — edit the
+source `.bib`/`.reg`, or flip an env flag. `gemini.reg` *is* a source (edits persist).
+
+Two ways to get dcshell in + launched:
+- **Quick (current):** overwrite the `sysstart.exe` slot with dcshell — it's already a module and is
+  launched last by `"Launch60"="sysstart.exe"`. `cp reference\shell-obj\dcshell.exe
+  C:\wcedreamcast\release\retail\OS\sysstart.exe` (original at `sysstart.exe.orig`). No bib/reg edits.
+- **Proper:** add `dcshell.exe $(_FLATRELEASEDIR)$(RELEASEDIR_OS)dcshell.exe NK SH` to the MODULES
+  block of the **source** `platform.bib`, copy the exe to `OS\`, and keep the `"Launch90"="dcshell.exe"`
+  / `"Depend90"=hex:1e,00` (depend on gwes=0x1e) already in `gemini.reg [HKEY_LOCAL_MACHINE\init]`.
+
+Drop the stock **devkit shell** (`shell.exe`, CESH — talks to the DA over P2 and faults with
+`Exception 0x180 PC=ac00xxxx` in an emulator) via the SDK's own switch: `set IMGNOSHELL=1` in
+`setenv.bat` (already set). It removes the `shell.exe`+`toolhelp.dll` modules and `"Launch11"="shell.exe"`.
+
+Then: `toolchain\build-image.bat retail` → `wrap-image.ps1` → `make-gdi.ps1` → load
+`reference\disc-shell\disc.gdi` in Flycast (`Debug.SerialConsoleEnabled` on).
 
 ## Reference
 NT4 explorer source (sparse-cloned, gitignored) at
