@@ -55,6 +55,18 @@ void GfxIconBig(int id, int x, int y);   // 32x32
 //
 void GfxLaunch(const WCHAR *path);
 
+//
+// Static desktop-layer cache. Paint the desktop once between Begin/End (into a
+// private buffer); GfxBlitDesktopCache() then stamps it into the frame buffer per
+// recomposite instead of repainting fills+icons+labels every frame.
+//
+void GfxBeginDesktopCache(void);
+void GfxEndDesktopCache(void);
+void GfxBlitDesktopCache(void);
+
+// Block until the PVR vblank (~60Hz) - pace the loop without Sleep's 50ms-tick rounding.
+HRESULT GfxWaitVBlank(void);
+
 extern HFONT g_FontUI;
 extern HFONT g_FontBold;
 extern HFONT g_FontTitle;

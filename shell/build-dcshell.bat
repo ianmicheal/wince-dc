@@ -29,7 +29,7 @@ if errorlevel 1 (echo [dcshell] COMPILE FAILED dcshell & exit /b 1)
 if errorlevel 1 (echo [dcshell] COMPILE FAILED dcinput & exit /b 1)
 
 echo [dcshell] linking dcshell.exe ...
-"%HOSTBIN%\link.exe" /nologo /machine:SH4 /subsystem:windowsce,2.12 /entry:WinMainCRTStartup /out:"%OUT%\dcshell.exe" "%OUT%\dcshell.obj" "%OUT%\dcgfx.obj" "%OUT%\dcinput.obj" "%DCSDK%\lib\%DCBT%\coredll.lib" "%DCSDK%\lib\%DCBT%\corelibc.lib" "%DCSDK%\lib\%DCBT%\ddraw.lib" "%DCSDK%\lib\%DCBT%\dinput.lib" "%DCSDK%\lib\%DCBT%\dxguid.lib" > "%OUT%\dcshell.link.log" 2>&1
+"%HOSTBIN%\link.exe" /nologo /machine:SH4 /subsystem:windowsce,2.12 /entry:WinMainCRTStartup /out:"%OUT%\dcshell.exe" "%OUT%\dcshell.obj" "%OUT%\dcgfx.obj" "%OUT%\dcinput.obj" "%DCSDK%\lib\%DCBT%\coredll.lib" "%DCSDK%\lib\%DCBT%\corelibc.lib" "%DCSDK%\lib\%DCBT%\ddraw.lib" "%DCSDK%\lib\%DCBT%\d3dim.lib" "%DCSDK%\lib\%DCBT%\dinput.lib" "%DCSDK%\lib\%DCBT%\dxguid.lib" > "%OUT%\dcshell.link.log" 2>&1
 type "%OUT%\dcshell.link.log"
 
 echo [dcshell] building DCWin clients (dcwlib + dcwcalc + dcwclock) ...
@@ -48,5 +48,8 @@ if errorlevel 1 (echo [dcwexp] COMPILE FAILED & exit /b 1)
 "%SHBIN%\cl.exe" %CF% /Fo"%OUT%\dcwtask.obj" "%~dp0dcwtask.c"
 if errorlevel 1 (echo [dcwtask] COMPILE FAILED & exit /b 1)
 "%HOSTBIN%\link.exe" /nologo /machine:SH4 /subsystem:windowsce,2.12 /entry:WinMainCRTStartup /out:"%OUT%\dcwtask.exe" "%OUT%\dcwtask.obj" "%OUT%\dcwlib.obj" %CLIBS% >> "%OUT%\dcshell.link.log" 2>&1
+"%SHBIN%\cl.exe" %CF% /Fo"%OUT%\dcwmem.obj" "%~dp0dcwmem.c"
+if errorlevel 1 (echo [dcwmem] COMPILE FAILED & exit /b 1)
+"%HOSTBIN%\link.exe" /nologo /machine:SH4 /subsystem:windowsce,2.12 /entry:WinMainCRTStartup /out:"%OUT%\dcwmem.exe" "%OUT%\dcwmem.obj" "%OUT%\dcwlib.obj" %CLIBS% >> "%OUT%\dcshell.link.log" 2>&1
 echo [dcshell] errorlevel=%errorlevel%  (out: %OUT%\dcshell.exe)
 endlocal

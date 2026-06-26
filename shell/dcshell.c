@@ -43,6 +43,7 @@ static const SHORTCUT s_desk[] =
     { L"Calculator",   NULL,         L"dcwcalc.exe",  ICON_APP },
     { L"Clock",        NULL,         L"dcwclock.exe", ICON_CLOCK },
     { L"Task Manager", NULL,         L"dcwtask.exe",  ICON_APP },
+    { L"Memtest",      NULL,         L"dcwmem.exe",   ICON_APP },
 };
 #define DESK_N (sizeof(s_desk) / sizeof(s_desk[0]))
 
@@ -60,6 +61,9 @@ static int   s_deskSel  = 0;
 static int   s_menuOpen = 0;
 static int   s_menuSel  = 0;
 static int   s_dirty    = 1;
+static int   s_deskDirty = 1;    // static desktop-layer cache needs a (re)build
+static int   s_cachedSel = -1;   // s_deskSel baked into the desktop cache
+static int   s_cachedMenu = -1;  // s_menuOpen baked into the desktop cache
 static int   s_focus    = -1;   // focused window index, or -1 = desktop
 static int   s_wasInUse[DCWIN_MAXWIN];
 static DWORD s_lastGen[DCWIN_MAXWIN];   // last composited gen per window
@@ -126,6 +130,7 @@ static void ShellLaunch(const WCHAR *exe)
         DbgStr(L"DCSHELL: fullscreen launch (display hand-off)\r\n");
         GfxLaunch(exe);                       // release display -> run -> reclaim
         s_dirty = 1;
+        s_deskDirty = 1;                      // surfaces/icons rebuilt -> recache desktop
     }
 }
 
@@ -335,7 +340,9 @@ static void SnapWindows(void)
         {
             DWORD g1 = w->gen, g2;
             int   cnt;
-            if (g1 & 1) { Sleep(0); continue; }              // client mid-write
+            if (g1 & 1) { Sleep(1); continue; }              // client mid-write (Sleep(1):
+            //            we run ABOVE_NORMAL, so Sleep(0) would never yield to the
+            //            lower-priority client writing the frame -> it could never finish
             cnt = (int)w->cmdCount;
             if (cnt > DCWIN_MAXCMD) cnt = DCWIN_MAXCMD;
             for (i = 0; i < cnt; i++) s_snap[wi][i] = w->cmd[i];
@@ -394,6 +401,23 @@ static void RenderWindow(int wi, BOOL active)
     if (hdc) { DrawWinText(hdc, w, wi, active); GfxUnlockDC(hdc); }
 }
 
+// Repaint the static desktop layer (bg + icons + labels) into the dcgfx desktop
+// cache. Called only when its visual inputs (selection, menu-open) change - never
+// for clock ticks, window republishes, or focus changes.
+static void RebuildDesktopCache(void)
+{
+    GfxBeginDesktopCache();
+    RenderDesktopFills();
+    RenderDesktopText((HDC)1);     // GfxText ignores the HDC; target is s_lockPix
+    GfxEndDesktopCache();
+    s_deskDirty  = 0;
+    s_cachedSel  = s_deskSel;
+    s_cachedMenu = s_menuOpen;
+}
+
+// Rebuild the scene: a PVR2 quad list, back-to-front (desktop -> windows -> taskbar)
+// = submit order = painter's Z. The desktop layer is a cached vertex sub-list,
+// rebuilt only when its inputs (selection / menu) change. GfxPresent consumes it.
 static void Render(void)
 {
     HDC hdc;
@@ -401,10 +425,10 @@ static void Render(void)
 
     SnapWindows();
 
-    // layer 0: desktop
-    RenderDesktopFills();
-    hdc = GfxLockDC();
-    if (hdc) { RenderDesktopText(hdc); GfxUnlockDC(hdc); }
+    // layer 0: desktop (cached vertex sub-list; rebuild only on layout change)
+    if (s_deskDirty || s_deskSel != s_cachedSel || s_menuOpen != s_cachedMenu)
+        RebuildDesktopCache();
+    GfxBlitDesktopCache();
 
     // layers 1..N: app windows, back-to-front, each composited fully
     if (s_shared)
@@ -420,8 +444,7 @@ static void Render(void)
     RenderTaskbarFills();
     hdc = GfxLockDC();
     if (hdc) { RenderBarsText(hdc); GfxUnlockDC(hdc); }
-    // NB: the pointer is NOT drawn here - it is overlaid on the primary in
-    // GfxPresent so moving it never triggers this recomposite.
+    // The cursor is NOT in the scene here - GfxPresent appends it as the last quad.
 }
 
 //
@@ -574,9 +597,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 {
     WNDCLASSW wc;
     MSG       msg;
-    DWORD     next, nextPresent = 0;
+    DWORD     next, nextPresent = 0, lt0;
     int       i, moved;
-    BOOL      rendered;
 
     DbgStr(L"DCSHELL: WinMain enter (hybrid desktop)\r\n");
 
@@ -598,6 +620,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
     }
     DbgStr(L"DCSHELL: desktop up\r\n");
 
+    // Run a notch above client apps. We are the window server: input polling and the
+    // cursor present must preempt a CPU-bound or fast-republishing client, or the
+    // pointer stalls for a whole scheduler quantum while that client holds the SH-4.
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
     s_diKbd = DInInit(s_hwnd);          // polled keyboard (low-latency) + controller pointer
     DbgStr(s_diKbd ? L"DCSHELL: DI keyboard active\r\n" : L"DCSHELL: DI keyboard absent, WM fallback\r\n");
     ProbeReap();                        // is OpenProcess usable for dead-window reaping?
@@ -605,6 +632,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
     next = GetTickCount() + 1000;
     for (;;)
     {
+        lt0 = GetTickCount();           // frame start (for the limiter + input-poll cost)
         while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
         {
             if (msg.message == WM_QUIT)
@@ -653,25 +681,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
                 DWORD g = s_shared->win[i].inUse ? s_shared->win[i].gen : 0;
                 if (g != s_lastGen[i]) { s_dirty = 1; s_lastGen[i] = g; }
             }
-        rendered = FALSE;
-        if (s_dirty)                    // recomposite the scene only on real change
+        // The scene is a PVR2 quad list that GfxPresent consumes + clears, so we MUST
+        // Render() (rebuild quads) before every present - a bare present would submit
+        // an empty scene. Rebuild is cheap (no rasterization), so recompose+present on
+        // any change, cursor move, or keepalive.
+        if (s_dirty || moved || GetTickCount() >= nextPresent)
         {
             Render();
             s_dirty = 0;
-            rendered = TRUE;
-        }
-        // Present (flip) only when something changed: a recomposite, a cursor move,
-        // or a low-rate keepalive. The flip chain retains content, so when idle we
-        // present nothing.
-        if (rendered || moved || GetTickCount() >= nextPresent)
-        {
             if (GfxPresent(s_cx, s_cy, DInHasPointer()))
-                s_dirty = 1;            // surface lost -> re-render next loop
-            nextPresent = GetTickCount() + 100;   // 10 Hz keepalive (insurance)
+                s_dirty = 1;            // surface lost -> rebuild next loop
+            nextPresent = GetTickCount() + 100;
         }
-        // ALWAYS yield ~1 frame. On the single SH-4 the client apps (Explorer,
-        // Task Manager) must get the CPU to read input + republish; never busy-spin
-        // (the earlier Sleep(1) "active" path starved them -> 1-2 s input lag).
-        Sleep(16);
+        // Pace to the PVR vblank (~60 Hz) instead of Sleep, which rounds up to the
+        // ~25 ms CE tick + a 25 ms guard (= the 20 fps cap). WaitForVerticalBlank
+        // yields during the blank at the real refresh rate; if it no-ops (returns
+        // non-OK, or the loop ran <8 ms so it clearly didn't pace), fall back to Sleep.
+        {
+            HRESULT vb = GfxWaitVBlank();
+            DWORD   el = GetTickCount() - lt0;
+            if (vb != 0 /*DD_OK*/ || el < 8)
+                Sleep(el < 16 ? 16 - el : 1);
+        }
     }
 }
