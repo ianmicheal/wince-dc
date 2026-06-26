@@ -64,7 +64,8 @@ static DWORD s_lastGen[DCWIN_MAXWIN];   // last composited gen per window
 static DWORD s_lastExec = 0;    // last processed exec request
 static HWND  s_hwnd     = NULL;
 static BOOL  s_diKbd    = FALSE; // DI keyboard acquired (else fall back to WM_KEYDOWN)
-static int   s_cx = SCREEN_W / 2, s_cy = SCREEN_H / 2;   // controller pointer
+static int   s_wmMouseSeen = 0;  // logged once when GWES mouse messages arrive
+static int   s_cx = SCREEN_W / 2, s_cy = SCREEN_H / 2;   // pointer position
 
 static DcShared *s_shared    = NULL;
 static HANDLE    s_sharedMap = NULL;
@@ -376,10 +377,8 @@ static void Render(void)
     RenderTaskbarFills();
     hdc = GfxLockDC();
     if (hdc) { RenderBarsText(hdc); GfxUnlockDC(hdc); }
-
-    // pointer (controller) on top of everything
-    if (DInHasPointer())
-        GfxIcon(ICON_CURSOR, s_cx, s_cy);
+    // NB: the pointer is NOT drawn here - it is overlaid on the primary in
+    // GfxPresent so moving it never triggers this recomposite.
 }
 
 //
@@ -501,6 +500,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_KEYDOWN:
         if (!s_diKbd) OnKey(wp);        // fallback when DI keyboard not available
         return 0;
+    case WM_MOUSEMOVE:                  // GWES mouse fallback (if DC mouse isn't on DI)
+        DInSetCursor((short)LOWORD(lp), (short)HIWORD(lp));
+        if (!s_wmMouseSeen) { s_wmMouseSeen = 1; DbgStr(L"DCSHELL: WM mouse active\r\n"); }
+        return 0;
+    case WM_LBUTTONDOWN:
+        DInSetCursor((short)LOWORD(lp), (short)HIWORD(lp));
+        DInPostClick();
+        return 0;
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
@@ -514,6 +521,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
     MSG       msg;
     DWORD     next;
     int       i;
+    BOOL      recomposited;
 
     DbgStr(L"DCSHELL: WinMain enter (hybrid desktop)\r\n");
 
@@ -560,9 +568,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
         }
         if (DInHasPointer())
         {
-            int nx, ny;
-            DInCursor(&nx, &ny);
-            if (nx != s_cx || ny != s_cy) { s_cx = nx; s_cy = ny; s_dirty = 1; }
+            DInCursor(&s_cx, &s_cy);    // pointer rides the present overlay; no recomposite
             if (DInTookClick()) HandleClick(s_cx, s_cy);
         }
 
@@ -584,13 +590,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
                 DWORD g = s_shared->win[i].inUse ? s_shared->win[i].gen : 0;
                 if (g != s_lastGen[i]) { s_dirty = 1; s_lastGen[i] = g; }
             }
+        recomposited = FALSE;
         if (s_dirty)
         {
             Render();
             s_dirty = 0;
+            recomposited = TRUE;        // tells GfxPresent the saved cursor region is stale
         }
-        if (GfxPresent())               // VRAM surface lost+restored -> redraw next frame
-            s_dirty = 1;
-        Sleep(16);                      // ~60 Hz loop; present is cheap, render only on change
+        // present every frame (primary is volatile); the pointer is composited into
+        // the back buffer (save-under) and sent in one blit -> no flicker, and
+        // cursor motion costs only a 16x16 save-under, not a recomposite
+        if (GfxPresent(s_cx, s_cy, DInHasPointer(), recomposited))
+            s_dirty = 1;                // VRAM surface lost+restored -> redraw next frame
+        Sleep(8);                       // ~120 Hz poll: low input latency; present stays cheap
     }
 }

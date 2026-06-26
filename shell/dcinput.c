@@ -1,9 +1,12 @@
 //
-// dcinput.c - DirectInput keyboard + controller (see dcinput.h).
+// dcinput.c - DirectInput keyboard + pointer (see dcinput.h).
 //
 // Keyboard: polled each frame, edge-detected (with auto-repeat for nav keys),
 // DIK scan codes mapped to VK and queued for the shell's OnKey.
-// Controller: analog stick -> cursor delta (deadzone + speed); A/B/X/Y -> click.
+// Pointer (two sources, either drives the cursor):
+//   - Mouse (DC Maple mouse / host mouse in Flycast): relative deltas, 1:1.
+//   - Controller analog stick: deadzone + time-based speed + sub-pixel accumulate.
+// Buttons (mouse L/M/R, or controller A/B/X/Y) -> click.
 //
 #define CINTERFACE
 #define DIRECTINPUT_VERSION 0x0500
@@ -14,14 +17,22 @@
 #define SCRW 640
 #define SCRH 480
 
-static LPDIRECTINPUT        g_di  = NULL;
-static LPDIRECTINPUTDEVICE2 g_kbd = NULL;
-static LPDIRECTINPUTDEVICE2 g_joy = NULL;
+static LPDIRECTINPUT        g_di    = NULL;
+static LPDIRECTINPUTDEVICE2 g_kbd   = NULL;
+static LPDIRECTINPUTDEVICE2 g_joy   = NULL;
+static LPDIRECTINPUTDEVICE2 g_mouse = NULL;
+static HWND                 g_hwnd  = NULL;
+static int                  g_wmPointer = 0;   // a GWES WM_MOUSE* arrived -> pointer exists
 
 static BYTE  g_now[256], g_last[256];
 static DWORD g_repeatAt[256];
 static int   g_cx = SCRW / 2, g_cy = SCRH / 2;
-static int   g_btnLast = 0, g_click = 0;
+static int   g_btnLast = 0, g_mbtnLast = 0, g_click = 0;
+static DWORD g_lastTick = 0;
+static long  g_accX = 0, g_accY = 0;   // sub-pixel motion accumulators (axis*ms)
+
+#define STICK_DZ   150     // analog deadzone (range is +-1000)
+#define STICK_DIV  1250    // px = axis * dt_ms / DIV; full deflection ~= 800 px/sec
 
 static DWORD g_q[32];
 static int   g_qh = 0, g_qt = 0;
@@ -54,12 +65,31 @@ static BOOL CALLBACK EnumCb(LPCDIDEVICEINSTANCE di, LPVOID ctx)
     IDirectInputDevice_Release(d1);
 
     t = GET_DIDEVICE_TYPE(di->dwDevType);
+    {
+        WCHAR b[128];
+        wsprintfW(b, L"DCIN: enum dev type=%u devtype=%08x name=%s\r\n",
+                  (unsigned)t, (unsigned)di->dwDevType, di->tszProductName);
+        OutputDebugStringW(b);
+    }
     if (t == DIDEVTYPE_KEYBOARD && !g_kbd)
     {
         IDirectInputDevice2_SetDataFormat(d2, &c_dfDIKeyboard);
         IDirectInputDevice2_Acquire(d2);
         g_kbd = d2;
         OutputDebugStringW(L"DCIN: keyboard acquired\r\n");
+    }
+    else if (t == DIDEVTYPE_MOUSE && !g_mouse)
+    {
+        HRESULT hr;
+        WCHAR   b[64];
+        IDirectInputDevice2_SetDataFormat(d2, &c_dfDIMouse);
+        // a cooperative level is required for the mouse to deliver data (the
+        // classic "acquired but GetDeviceState returns nothing" gotcha)
+        IDirectInputDevice2_SetCooperativeLevel(d2, g_hwnd, DISCL_BACKGROUND | DISCL_NONEXCLUSIVE);
+        hr = IDirectInputDevice2_Acquire(d2);
+        g_mouse = d2;
+        wsprintfW(b, L"DCIN: mouse acquired (hr=%08x)\r\n", (unsigned)hr);
+        OutputDebugStringW(b);
     }
     else if (t == DIDEVTYPE_JOYSTICK && !g_joy)
     {
@@ -84,6 +114,7 @@ static BOOL CALLBACK EnumCb(LPCDIDEVICEINSTANCE di, LPVOID ctx)
 
 BOOL DInInit(HWND hwnd)
 {
+    g_hwnd = hwnd;
     if (DirectInputCreate(GetModuleHandleW(NULL), DIRECTINPUT_VERSION, &g_di, NULL) != DI_OK)
     {
         OutputDebugStringW(L"DCIN: DirectInputCreate FAILED\r\n");
@@ -95,9 +126,10 @@ BOOL DInInit(HWND hwnd)
 
 void DInShutdown(void)
 {
-    if (g_kbd) { IDirectInputDevice2_Unacquire(g_kbd); IDirectInputDevice2_Release(g_kbd); g_kbd = NULL; }
-    if (g_joy) { IDirectInputDevice2_Unacquire(g_joy); IDirectInputDevice2_Release(g_joy); g_joy = NULL; }
-    if (g_di)  { IDirectInput_Release(g_di); g_di = NULL; }
+    if (g_kbd)   { IDirectInputDevice2_Unacquire(g_kbd);   IDirectInputDevice2_Release(g_kbd);   g_kbd = NULL; }
+    if (g_mouse) { IDirectInputDevice2_Unacquire(g_mouse); IDirectInputDevice2_Release(g_mouse); g_mouse = NULL; }
+    if (g_joy)   { IDirectInputDevice2_Unacquire(g_joy);   IDirectInputDevice2_Release(g_joy);   g_joy = NULL; }
+    if (g_di)    { IDirectInput_Release(g_di); g_di = NULL; }
 }
 
 void DInUpdate(void)
@@ -125,6 +157,25 @@ void DInUpdate(void)
         }
     }
 
+    if (g_mouse)
+    {
+        DIMOUSESTATE ms;
+        IDirectInputDevice2_Poll(g_mouse);
+        if (IDirectInputDevice2_GetDeviceState(g_mouse, sizeof(ms), &ms) != DI_OK)
+            IDirectInputDevice2_Acquire(g_mouse);
+        else
+        {
+            int btn;
+            g_cx += ms.lX;              // relative deltas, 1:1 (snappy)
+            g_cy += ms.lY;
+            if (g_cx < 0) g_cx = 0;  if (g_cx >= SCRW) g_cx = SCRW - 1;
+            if (g_cy < 0) g_cy = 0;  if (g_cy >= SCRH) g_cy = SCRH - 1;
+            btn = (ms.rgbButtons[0] | ms.rgbButtons[1] | ms.rgbButtons[2]) & 0x80;
+            if (btn && !g_mbtnLast) g_click = 1;
+            g_mbtnLast = btn;
+        }
+    }
+
     if (g_joy)
     {
         DIJOYSTATE js;
@@ -133,11 +184,17 @@ void DInUpdate(void)
             IDirectInputDevice2_Acquire(g_joy);
         else
         {
-            int ax = js.lX < 0 ? -js.lX : js.lX;
-            int ay = js.lY < 0 ? -js.lY : js.lY;
-            int btn;
-            if (ax > 150) g_cx += js.lX / 80;
-            if (ay > 150) g_cy += js.lY / 80;
+            DWORD dt = g_lastTick ? (nowt - g_lastTick) : 16;
+            int   ax = js.lX < 0 ? -js.lX : js.lX;
+            int   ay = js.lY < 0 ? -js.lY : js.lY;
+            int   btn, dx, dy;
+            if (dt > 100) dt = 100;     // clamp after a stall so the cursor doesn't leap
+            // time-based + sub-pixel accumulator: speed is frame-rate independent
+            // AND small deflections still move (no truncation-to-zero at short dt)
+            if (ax > STICK_DZ) { g_accX += (long)js.lX * (long)dt; dx = (int)(g_accX / STICK_DIV); g_accX -= (long)dx * STICK_DIV; g_cx += dx; }
+            else g_accX = 0;
+            if (ay > STICK_DZ) { g_accY += (long)js.lY * (long)dt; dy = (int)(g_accY / STICK_DIV); g_accY -= (long)dy * STICK_DIV; g_cy += dy; }
+            else g_accY = 0;
             if (g_cx < 0) g_cx = 0;  if (g_cx >= SCRW) g_cx = SCRW - 1;
             if (g_cy < 0) g_cy = 0;  if (g_cy >= SCRH) g_cy = SCRH - 1;
             btn = (js.rgbButtons[0] | js.rgbButtons[1] | js.rgbButtons[2] | js.rgbButtons[3]) & 0x80;
@@ -145,6 +202,7 @@ void DInUpdate(void)
             g_btnLast = btn;
         }
     }
+    g_lastTick = nowt;
 }
 
 int DInNextKey(DWORD *vk)
@@ -155,6 +213,17 @@ int DInNextKey(DWORD *vk)
     return 1;
 }
 
-int  DInHasPointer(void)        { return g_joy != NULL; }
+// GWES window-message fallback: the DC mouse may reach us via WM_MOUSE* instead
+// of DirectInput. The shell forwards those here so all paths share one cursor.
+void DInSetCursor(int x, int y)
+{
+    if (x < 0) x = 0;  if (x >= SCRW) x = SCRW - 1;
+    if (y < 0) y = 0;  if (y >= SCRH) y = SCRH - 1;
+    g_cx = x; g_cy = y;
+    g_wmPointer = 1;
+}
+void DInPostClick(void) { g_click = 1; }
+
+int  DInHasPointer(void)        { return (g_mouse != NULL) || (g_joy != NULL) || g_wmPointer; }
 void DInCursor(int *x, int *y)  { *x = g_cx; *y = g_cy; }
 int  DInTookClick(void)         { int c = g_click; g_click = 0; return c; }

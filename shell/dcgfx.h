@@ -35,10 +35,14 @@ void GfxUnlockDC(HDC hdc);
 void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const WCHAR *text);
 
 //
-// Blit the back buffer to the (volatile) primary. Call every loop iteration so
-// the visible screen always shows the last full frame.
+// Present every loop iteration (the primary is volatile). The pointer is
+// composited into the back buffer via a 16x16 save-under and the whole frame is
+// sent to the primary in ONE blit, so the cursor never flickers and moving it
+// never forces a desktop recomposite. Pass backRecomposited=TRUE on frames where
+// you just fully repainted the back buffer (Render). Returns TRUE if a surface
+// was lost+restored (back-buffer content gone; caller must re-render).
 //
-BOOL GfxPresent(void);   // TRUE if a surface was lost+restored (caller must re-render)
+BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor, BOOL backRecomposited);
 
 //
 // 16x16 color-keyed icons (built from embedded art into DDraw surfaces). Blit in
