@@ -14,6 +14,7 @@
 //
 #include "dcgfx.h"
 #include "dcwin.h"
+#include "dcinput.h"
 
 #define TASK_H    26
 #define ROW_H     18            // Start-menu row height
@@ -59,8 +60,11 @@ static int   s_menuSel  = 0;
 static int   s_dirty    = 1;
 static int   s_focus    = -1;   // focused window index, or -1 = desktop
 static int   s_wasInUse[DCWIN_MAXWIN];
+static DWORD s_lastGen[DCWIN_MAXWIN];   // last composited gen per window
 static DWORD s_lastExec = 0;    // last processed exec request
 static HWND  s_hwnd     = NULL;
+static BOOL  s_diKbd    = FALSE; // DI keyboard acquired (else fall back to WM_KEYDOWN)
+static int   s_cx = SCREEN_W / 2, s_cy = SCREEN_H / 2;   // controller pointer
 
 static DcShared *s_shared    = NULL;
 static HANDLE    s_sharedMap = NULL;
@@ -147,6 +151,8 @@ static void FixupFocus(void)
     for (i = 0; i < DCWIN_MAXWIN; i++)
     {
         int now = s_shared->win[i].inUse ? 1 : 0;
+        if (now != s_wasInUse[i])
+            s_dirty = 1;                    // a window opened/closed -> recompose
         if (now && !s_wasInUse[i])
             s_focus = i;
         s_wasInUse[i] = now;
@@ -370,6 +376,10 @@ static void Render(void)
     RenderTaskbarFills();
     hdc = GfxLockDC();
     if (hdc) { RenderBarsText(hdc); GfxUnlockDC(hdc); }
+
+    // pointer (controller) on top of everything
+    if (DInHasPointer())
+        GfxIcon(ICON_CURSOR, s_cx, s_cy);
 }
 
 //
@@ -427,6 +437,58 @@ static void OnKey(WPARAM wp)
     }
 }
 
+// Pointer click hit-test (top-down): Start menu -> Start button -> taskbar buttons
+// -> windows (close box / focus) -> desktop icons.
+static void HandleClick(int x, int y)
+{
+    int k;
+    s_dirty = 1;
+
+    if (s_menuOpen)
+    {
+        int h = (int)START_N * ROW_H + 8, my = TASK_Y - h + 4;
+        if (x >= 4 && x < 4 + MENU_W && y >= my && y < my + (int)START_N * ROW_H)
+        { s_menuSel = (y - my) / ROW_H; ActivateStartItem(); return; }
+        s_menuOpen = 0;                 // click elsewhere closes the menu
+    }
+    if (y >= TASK_Y && x >= 4 && x < 72)            // Start button
+    { s_menuOpen = !s_menuOpen; s_menuSel = 0; return; }
+    if (y >= TASK_Y && s_shared)                    // taskbar window buttons
+    {
+        int bx = 80;
+        for (k = 0; k < DCWIN_MAXWIN; k++)
+        { if (!s_shared->win[k].inUse) continue; if (x >= bx && x < bx + 110) { s_focus = k; return; } bx += 116; }
+    }
+    if (s_shared)                                   // windows: topmost (focused) first
+    {
+        int order[DCWIN_MAXWIN + 1], n = 0, j;
+        if (s_focus >= 0 && s_shared->win[s_focus].inUse) order[n++] = s_focus;
+        for (k = 0; k < DCWIN_MAXWIN; k++) if (s_shared->win[k].inUse && k != s_focus) order[n++] = k;
+        for (j = 0; j < n; j++)
+        {
+            DcWindow *w = &s_shared->win[order[j]];
+            if (x >= w->x - 2 && x < w->x + w->w + 2 && y >= w->y - 18 && y < w->y + w->h + 2)
+            {
+                if (x >= w->x + w->w - 14 && x <= w->x + w->w + 1 && y >= w->y - 16 && y <= w->y - 3)
+                { w->wantClose = 1; return; }       // close box
+                s_focus = order[j];
+                return;
+            }
+        }
+    }
+    for (k = 0; k < (int)DESK_N; k++)               // desktop icons
+    {
+        int iy = 24 + k * 76;
+        if (x >= 14 && x < 110 && y >= iy && y < iy + 54)
+        {
+            s_deskSel = k;
+            if (s_desk[k].path) LaunchApp(L"dcwexp.exe", s_desk[k].path);
+            else                LaunchApp(s_desk[k].exe, NULL);
+            return;
+        }
+    }
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
@@ -437,7 +499,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         ValidateRect(hwnd, NULL);       // continuous present shows the frame; don't storm
         return 0;
     case WM_KEYDOWN:
-        OnKey(wp);
+        if (!s_diKbd) OnKey(wp);        // fallback when DI keyboard not available
         return 0;
     case WM_DESTROY:
         PostQuitMessage(0);
@@ -451,6 +513,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
     WNDCLASSW wc;
     MSG       msg;
     DWORD     next;
+    int       i;
 
     DbgStr(L"DCSHELL: WinMain enter (hybrid desktop)\r\n");
 
@@ -472,6 +535,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
     }
     DbgStr(L"DCSHELL: desktop up\r\n");
 
+    s_diKbd = DInInit(s_hwnd);          // polled keyboard (low-latency) + controller pointer
+    DbgStr(s_diKbd ? L"DCSHELL: DI keyboard active\r\n" : L"DCSHELL: DI keyboard absent, WM fallback\r\n");
+
     next = GetTickCount() + 1000;
     for (;;)
     {
@@ -479,12 +545,27 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
         {
             if (msg.message == WM_QUIT)
             {
+                DInShutdown();
                 GfxShutdown();
                 return 0;
             }
             TranslateMessage(&msg);
             DispatchMessageW(&msg);
         }
+
+        DInUpdate();                    // poll DI devices once per frame
+        {
+            DWORD vk;
+            while (DInNextKey(&vk)) OnKey(vk);
+        }
+        if (DInHasPointer())
+        {
+            int nx, ny;
+            DInCursor(&nx, &ny);
+            if (nx != s_cx || ny != s_cy) { s_cx = nx; s_cy = ny; s_dirty = 1; }
+            if (DInTookClick()) HandleClick(s_cx, s_cy);
+        }
+
         FixupFocus();                   // auto-focus new windows, drop closed ones
         if (s_shared && s_shared->execSeq != s_lastExec)   // a window asked to launch an app
         {
@@ -496,8 +577,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
             s_dirty = 1;
             next += 1000;
         }
-        if (CountWindows() > 0)         // an app window is live -> keep compositing
-            s_dirty = 1;
+        // re-render only when a window published a new frame (digit typed, clock tick)
+        if (s_shared)
+            for (i = 0; i < DCWIN_MAXWIN; i++)
+            {
+                DWORD g = s_shared->win[i].inUse ? s_shared->win[i].gen : 0;
+                if (g != s_lastGen[i]) { s_dirty = 1; s_lastGen[i] = g; }
+            }
         if (s_dirty)
         {
             Render();
@@ -505,6 +591,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
         }
         if (GfxPresent())               // VRAM surface lost+restored -> redraw next frame
             s_dirty = 1;
-        Sleep(33);
+        Sleep(16);                      // ~60 Hz loop; present is cheap, render only on change
     }
 }

@@ -1,5 +1,12 @@
 # dcshell — a desktop shell/launcher for Dreamcast Windows CE 2.12
 
+> **⚠ This file describes the original v1 launcher and an early (wrong) GDI model.**
+> The shell is now a **windowed compositor (DCWin)** and the DC display turned out to be
+> **DirectDraw, not GDI** (see below — GWES GDI has phantom exports). For the current
+> architecture, build loop, and status read, in order: **[HANDOFF.md](HANDOFF.md)**,
+> **[BUILD.md](BUILD.md)**, **[ROADMAP.md](ROADMAP.md)**. Image wiring: [image-wiring/](image-wiring/).
+
+
 The piece the SDK doesn't have: there's **no `explorer.exe`** anywhere (SDK, leak, or any
 PB), and GWES/shell source was never released — so the shell is the one component you **write**,
 not acquire (see `../docs/06`/`../docs/08` and the NT4/PB analyses). It's the *easy* part: the

@@ -81,6 +81,11 @@ static const char *s_iconArt[ICON_COUNT][16] =
         " OO  OOOOOO  O", " OO OO    OO O", " OO OO    O  O", " OO  OO     OO",
         " OOO  OOOOOOO", "  OOO      OO", "   OOOOOOOOO", "     OOOOO", "", "", ""
     },
+    {   // ICON_CURSOR (arrow)
+        "K", "KK", "KWK", "KWWK", "KWWWK", "KWWWWK", "KWWWWWK", "KWWWWWWK",
+        "KWWWWWWWK", "KWWWWWKKK", "KWWKWWK", "KWK KWWK", "KK   KWWK", "      KWK",
+        "       K", ""
+    },
 };
 
 static COLORREF PalColor(char c)
