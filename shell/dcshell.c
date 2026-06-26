@@ -1,75 +1,46 @@
 //
-// dcshell.c - Dreamcast CE hybrid desktop shell (NT 4.0 style).
+// dcshell.c - Dreamcast CE hybrid desktop shell (DCWin compositor).
 //
-// Boots to a DESKTOP (teal, shortcut icons, taskbar). Opening "My Dreamcast" (or
-// a Start-menu item) switches to the EXPLORER view (NT4 chrome: title / menu /
-// address / column list / status). Esc closes the Explorer back to the desktop;
-// Tab toggles the Start menu in either view.
+// A desktop (teal background, shortcut icons, taskbar, Start menu). Everything
+// else is a separate windowed process drawn by the compositor: Explorer
+// (dcwexp.exe), Calculator, Clock. Desktop/Start shortcuts with a path launch the
+// Explorer at that path; shortcuts with an exe launch that app.
 //
-// All drawing goes to a persistent back buffer (dcgfx) then GfxPresent blits it to
-// the volatile DC primary every frame. Fills/bevels are DirectDraw COLORFILL; text
-// is GDI Arial. Rendering is dirty-flag driven (one Render per loop) so WM_PAINT
-// never storms the input queue.
+// Drawing: the whole frame is composited into a back buffer (dcgfx), presented to
+// the volatile DC primary each loop. Fills/bevels are DirectDraw COLORFILL, text
+// is GDI Arial, icons are color-keyed surfaces. Each layer (desktop -> windows
+// back-to-front -> taskbar/Start) does its fills then a GetDC text pass, so
+// overlapping windows clip correctly.
 //
 #include "dcgfx.h"
 #include "dcwin.h"
 
-#define MAX_ENT  256
-
-#define VIEW_DESKTOP   0
-#define VIEW_EXPLORER  1
-
-// Explorer chrome metrics
-#define TITLE_H   18
-#define MENU_H    18
-#define ADDR_H    22
-#define COLH_H    18
-#define STATUS_H  18
 #define TASK_H    26
-#define ROW_H     18
-
-#define ADDR_Y    (TITLE_H + MENU_H)
-#define COLH_Y    (ADDR_Y + ADDR_H)
-#define LIST_TOP  (COLH_Y + COLH_H)
-#define LIST_BOT  (SCREEN_H - TASK_H - STATUS_H)
-#define STATUS_Y  LIST_BOT
+#define ROW_H     18            // Start-menu row height
 #define TASK_Y    (SCREEN_H - TASK_H)
-#define VIS       ((LIST_BOT - LIST_TOP) / ROW_H)
-
-#define COL_NAME_X  28
-#define COL_SIZE_X  330
-#define COL_TYPE_X  450
+#define MENU_W    168
 
 #define CL_DESKTOP  RGB(0, 128, 128)
 #define CL_FACE     RGB(192, 192, 192)
 #define CL_TITLE    RGB(0, 0, 128)
-#define CL_WINDOW   RGB(255, 255, 255)
 #define CL_SEL      RGB(0, 0, 128)
 #define CL_TEXT     RGB(0, 0, 0)
-#define CL_DIR      RGB(0, 0, 160)
 #define CL_WHITE    RGB(255, 255, 255)
 
 typedef struct
 {
-    WCHAR name[128];
-    DWORD attr;
-    DWORD size;
-} ENTRY;
-
-typedef struct
-{
     const WCHAR *label;
-    const WCHAR *path;     // explorer path, or NULL
-    const WCHAR *exe;      // app to launch, or NULL
+    const WCHAR *path;     // open Explorer here, or NULL
+    const WCHAR *exe;      // launch this app, or NULL
     int          icon;     // ICON_*
 } SHORTCUT;
 
 static const SHORTCUT s_desk[] =
 {
-    { L"My Dreamcast", L"\\",        NULL,           ICON_SWIRL },
-    { L"CD-ROM",       L"\\CD-ROM",  NULL,           ICON_DRIVE },
-    { L"Calculator",   NULL,         L"dcwcalc.exe", ICON_APP },
-    { L"Clock",        NULL,         L"dcwclock.exe",ICON_CLOCK },
+    { L"My Dreamcast", L"\\",        NULL,            ICON_SWIRL },
+    { L"CD-ROM",       L"\\CD-ROM",  NULL,            ICON_DRIVE },
+    { L"Calculator",   NULL,         L"dcwcalc.exe",  ICON_APP },
+    { L"Clock",        NULL,         L"dcwclock.exe", ICON_CLOCK },
 };
 #define DESK_N (sizeof(s_desk) / sizeof(s_desk[0]))
 
@@ -81,15 +52,7 @@ static const SHORTCUT s_start[] =
     { L"Shut Down...", NULL,         NULL, ICON_FILE },
 };
 #define START_N (sizeof(s_start) / sizeof(s_start[0]))
-#define MENU_W  168
 
-static ENTRY s_ent[MAX_ENT];
-static int   s_count = 0;
-static int   s_sel   = 0;
-static int   s_top   = 0;
-static WCHAR s_dir[MAX_PATH] = L"\\";
-
-static int   s_view     = VIEW_DESKTOP;
 static int   s_deskSel  = 0;
 static int   s_menuOpen = 0;
 static int   s_menuSel  = 0;
@@ -97,20 +60,20 @@ static int   s_dirty    = 1;
 static int   s_focus    = -1;   // focused window index, or -1 = desktop
 static int   s_wasInUse[DCWIN_MAXWIN];
 static DWORD s_lastExec = 0;    // last processed exec request
+static HWND  s_hwnd     = NULL;
 
-static HWND  s_hwnd = NULL;
+static DcShared *s_shared    = NULL;
+static HANDLE    s_sharedMap = NULL;
+
+// seqlock snapshot of each window's command list (avoids reading a half-written frame)
+static DcCmd s_snap[DCWIN_MAXWIN][DCWIN_MAXCMD];
+static int   s_snapN[DCWIN_MAXWIN];
 
 static void DbgStr(const WCHAR *s) { OutputDebugStringW(s); }
 
 //
-// DCWin compositor: a shared section holds a window registry; client apps (their
-// own processes) publish draw-command lists, the shell composites them as windows
-// and routes input. Poll-based (CE maps the named section at the same VA in every
-// process, proven 2026-06-26).
+// Compositor shared section + launching
 //
-static DcShared *s_shared    = NULL;
-static HANDLE    s_sharedMap = NULL;
-
 static void InitShared(void)
 {
     s_sharedMap = CreateFileMappingW((HANDLE)-1, NULL, PAGE_READWRITE, 0, sizeof(DcShared), DCWIN_SECTION);
@@ -139,8 +102,7 @@ static void LaunchApp(const WCHAR *exe, const WCHAR *args)
     else DbgStr(L"DCSHELL: CreateProcess(app) FAILED\r\n");
 }
 
-// dcw*.exe are windowed DCWin apps (composited); anything else is treated as a
-// fullscreen app that needs the display handed to it.
+// dcw*.exe are windowed DCWin apps (composited); anything else gets the display.
 static BOOL IsDcwApp(const WCHAR *path)
 {
     const WCHAR *b = path, *p;
@@ -160,6 +122,9 @@ static void ShellLaunch(const WCHAR *exe)
     }
 }
 
+//
+// Window focus management
+//
 static int CountWindows(void)
 {
     int i, n = 0;
@@ -204,113 +169,31 @@ static void CycleFocus(void)
 }
 
 //
-// Helpers
+// Rendering. Each layer: COLORFILL/icon fills (DC unlocked) then a GetDC text pass.
 //
-static void CopyN(WCHAR *dst, const WCHAR *src, int n)
+static void RenderDesktopFills(void)
 {
-    int i;
-    for (i = 0; i < n - 1 && src[i]; i++)
-        dst[i] = src[i];
-    dst[i] = 0;
-}
+    int i, y;
 
-static BOOL IsRoot(void)            { return (s_dir[0] == L'\\' && s_dir[1] == 0); }
-static BOOL IsDir(const ENTRY *e)   { return (e->attr & FILE_ATTRIBUTE_DIRECTORY) != 0; }
-
-static BOOL EndsWithExe(const WCHAR *s)
-{
-    int n = lstrlenW(s);
-    if (n < 4 || s[n - 4] != L'.')
-        return FALSE;
-    return (s[n - 3] | 32) == 'e' && (s[n - 2] | 32) == 'x' && (s[n - 1] | 32) == 'e';
-}
-
-static void JoinPath(WCHAR *out, const WCHAR *dir, const WCHAR *name)
-{
-    if (dir[1] == 0)
-        wsprintfW(out, L"\\%s", name);
-    else
-        wsprintfW(out, L"%s\\%s", dir, name);
-}
-
-//
-// File model
-//
-static void ScanDir(void)
-{
-    WCHAR            pat[MAX_PATH];
-    WIN32_FIND_DATAW fd;
-    HANDLE           h;
-
-    s_count = 0;
-    s_sel   = 0;
-    s_top   = 0;
-
-    if (!IsRoot())
+    GfxFill(0, 0, SCREEN_W, TASK_Y, CL_DESKTOP);
+    for (i = 0; i < (int)DESK_N; i++)
     {
-        lstrcpyW(s_ent[s_count].name, L"..");
-        s_ent[s_count].attr = FILE_ATTRIBUTE_DIRECTORY;
-        s_ent[s_count].size = 0;
-        s_count++;
-    }
-
-    if (IsRoot())
-        lstrcpyW(pat, L"\\*.*");
-    else
-        wsprintfW(pat, L"%s\\*.*", s_dir);
-
-    h = FindFirstFileW(pat, &fd);
-    if (h != INVALID_HANDLE_VALUE)
-    {
-        do
-        {
-            if (s_count >= MAX_ENT)
-                break;
-            if (fd.cFileName[0] == L'.' &&
-                (fd.cFileName[1] == 0 || (fd.cFileName[1] == L'.' && fd.cFileName[2] == 0)))
-                continue;
-            CopyN(s_ent[s_count].name, fd.cFileName, 128);
-            s_ent[s_count].attr = fd.dwFileAttributes;
-            s_ent[s_count].size = fd.nFileSizeLow;
-            s_count++;
-        } while (FindNextFileW(h, &fd));
-        FindClose(h);
+        y = 24 + i * 76;
+        if (i == s_deskSel && !s_menuOpen)
+            GfxFill(14, y + 36, 110, y + 52, CL_TITLE);     // label highlight
+        GfxIconBig(s_desk[i].icon, 46, y);                  // 32x32 icon
     }
 }
 
-static void GoParent(void)
+static void RenderDesktopText(HDC hdc)
 {
-    int i, last = -1;
-
-    if (IsRoot())
-        return;
-    for (i = 0; s_dir[i]; i++)
-        if (s_dir[i] == L'\\')
-            last = i;
-    if (last <= 0)
-        lstrcpyW(s_dir, L"\\");
-    else
-        s_dir[last] = 0;
-    ScanDir();
-}
-
-static void OpenExplorer(const WCHAR *path)
-{
-    if (!path)
-        return;
-    lstrcpyW(s_dir, path);
-    ScanDir();
-    s_view = VIEW_EXPLORER;
-}
-
-//
-// Rendering - PASS 1 = COLORFILL/bevel, PASS 2 = text (no fills while DC locked).
-//
-static int FileIcon(const ENTRY *e)
-{
-    if (IsDir(e))             return ICON_FOLDER;
-    if (EndsWithExe(e->name)) return ICON_APP;
-    return ICON_FILE;
+    int i, y;
+    for (i = 0; i < (int)DESK_N; i++)
+    {
+        COLORREF bg = (i == s_deskSel && !s_menuOpen) ? CL_TITLE : CL_DESKTOP;
+        y = 24 + i * 76;
+        GfxText(hdc, 18, y + 37, CL_WHITE, bg, g_FontUI, s_desk[i].label);
+    }
 }
 
 static void RenderTaskbarFills(void)
@@ -350,111 +233,6 @@ static void RenderTaskbarFills(void)
     }
 }
 
-static void RenderDesktopFills(void)
-{
-    int i, y;
-
-    GfxFill(0, 0, SCREEN_W, TASK_Y, CL_DESKTOP);
-    for (i = 0; i < (int)DESK_N; i++)
-    {
-        y = 24 + i * 76;
-        if (i == s_deskSel && !s_menuOpen)
-            GfxFill(14, y + 36, 110, y + 52, CL_TITLE);     // label highlight
-        GfxIconBig(s_desk[i].icon, 46, y);                  // 32x32 icon
-    }
-}
-
-static void RenderExplorerFills(void)
-{
-    RECT rc;
-    int  i, y;
-
-    GfxFill(0, 0, SCREEN_W, TITLE_H, CL_TITLE);
-    GfxFill(0, TITLE_H, SCREEN_W, ADDR_Y, CL_FACE);
-    GfxFill(0, ADDR_Y, SCREEN_W, COLH_Y, CL_FACE);
-
-    SetRect(&rc, 76, ADDR_Y + 3, SCREEN_W - 8, COLH_Y - 3);
-    GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_WINDOW); GfxBevel(&rc, FALSE);
-
-    GfxFill(0, COLH_Y, SCREEN_W, LIST_TOP, CL_FACE);
-    SetRect(&rc, 2, COLH_Y + 1, COL_SIZE_X - 4, LIST_TOP - 1); GfxBevel(&rc, TRUE);
-    SetRect(&rc, COL_SIZE_X - 4, COLH_Y + 1, COL_TYPE_X - 4, LIST_TOP - 1); GfxBevel(&rc, TRUE);
-    SetRect(&rc, COL_TYPE_X - 4, COLH_Y + 1, SCREEN_W - 2, LIST_TOP - 1); GfxBevel(&rc, TRUE);
-
-    GfxFill(0, LIST_TOP, SCREEN_W, LIST_BOT, CL_WINDOW);
-
-    for (i = s_top; i < s_count && i < s_top + VIS; i++)
-    {
-        y = LIST_TOP + (i - s_top) * ROW_H;
-        if (i == s_sel && !s_menuOpen)
-            GfxFill(2, y, SCREEN_W - 2, y + ROW_H, CL_SEL);
-        GfxIcon(FileIcon(&s_ent[i]), 5, y + 1);
-    }
-
-    GfxFill(0, STATUS_Y, SCREEN_W, TASK_Y, CL_FACE);
-    SetRect(&rc, 2, STATUS_Y + 1, SCREEN_W - 2, TASK_Y - 1); GfxBevel(&rc, FALSE);
-
-    // caption buttons
-    SetRect(&rc, SCREEN_W - 54, 3, SCREEN_W - 38, TITLE_H - 3); GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE); GfxBevel(&rc, TRUE);
-    SetRect(&rc, SCREEN_W - 36, 3, SCREEN_W - 20, TITLE_H - 3); GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE); GfxBevel(&rc, TRUE);
-    SetRect(&rc, SCREEN_W - 18, 3, SCREEN_W - 2,  TITLE_H - 3); GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE); GfxBevel(&rc, TRUE);
-}
-
-static void RenderViewText(HDC hdc)
-{
-    int i, y;
-
-    if (s_view == VIEW_DESKTOP)
-    {
-        for (i = 0; i < (int)DESK_N; i++)
-        {
-            COLORREF fg = (i == s_deskSel && !s_menuOpen) ? CL_WHITE : CL_WHITE;
-            COLORREF bg = (i == s_deskSel && !s_menuOpen) ? CL_TITLE : CL_DESKTOP;
-            y = 24 + i * 76;
-            GfxText(hdc, 18, y + 37, fg, bg, g_FontUI, s_desk[i].label);
-        }
-    }
-    else
-    {
-        GfxText(hdc, 6, 1, CL_WHITE, CL_TITLE, g_FontTitle, L"Dreamcast CE \x2014 Explorer");
-        GfxText(hdc, SCREEN_W - 51, 3, CL_TEXT, CL_FACE, g_FontUI, L"_");
-        GfxText(hdc, SCREEN_W - 33, 3, CL_TEXT, CL_FACE, g_FontUI, L"\x25A1");
-        GfxText(hdc, SCREEN_W - 15, 3, CL_TEXT, CL_FACE, g_FontUI, L"X");
-        GfxText(hdc, 8, TITLE_H + 3, CL_TEXT, CL_FACE, g_FontUI, L"File    Edit    View    Help");
-        GfxText(hdc, 8, ADDR_Y + 4, CL_TEXT, CL_FACE, g_FontUI, L"Address");
-        GfxText(hdc, 80, ADDR_Y + 5, CL_TEXT, CL_WINDOW, g_FontUI, s_dir);
-        GfxText(hdc, COL_NAME_X, COLH_Y + 2, CL_TEXT, CL_FACE, g_FontBold, L"Name");
-        GfxText(hdc, COL_SIZE_X, COLH_Y + 2, CL_TEXT, CL_FACE, g_FontBold, L"Size");
-        GfxText(hdc, COL_TYPE_X, COLH_Y + 2, CL_TEXT, CL_FACE, g_FontBold, L"Type");
-
-        for (i = s_top; i < s_count && i < s_top + VIS; i++)
-        {
-            ENTRY   *e   = &s_ent[i];
-            BOOL     dir = IsDir(e);
-            BOOL     hot = (i == s_sel && !s_menuOpen);
-            COLORREF fg  = hot ? CL_WHITE : (dir ? CL_DIR : CL_TEXT);
-            COLORREF bg  = hot ? CL_SEL : CL_WINDOW;
-            const WCHAR *type = dir ? L"Folder" : (EndsWithExe(e->name) ? L"Application" : L"File");
-
-            y = LIST_TOP + (i - s_top) * ROW_H;
-            GfxText(hdc, COL_NAME_X, y + 2, fg, bg, g_FontUI, e->name);
-            if (!dir)
-            {
-                WCHAR sz[24];
-                wsprintfW(sz, L"%u", e->size);
-                GfxText(hdc, COL_SIZE_X, y + 2, fg, bg, g_FontUI, sz);
-            }
-            GfxText(hdc, COL_TYPE_X, y + 2, fg, bg, g_FontUI, type);
-        }
-
-        {
-            WCHAR st[64];
-            wsprintfW(st, L"%d object(s)", s_count);
-            GfxText(hdc, 8, STATUS_Y + 2, CL_TEXT, CL_FACE, g_FontUI, st);
-        }
-    }
-}
-
 static void RenderBarsText(HDC hdc)
 {
     SYSTEMTIME t;
@@ -466,7 +244,7 @@ static void RenderBarsText(HDC hdc)
     wsprintfW(clk, L"%02d:%02d", t.wHour, t.wMinute);
     GfxText(hdc, SCREEN_W - 44, TASK_Y + 5, CL_TEXT, CL_FACE, g_FontUI, clk);
 
-    if (s_shared)                       // window button labels
+    if (s_shared)
     {
         int bx = 80, k;
         for (k = 0; k < DCWIN_MAXWIN; k++)
@@ -490,10 +268,6 @@ static void RenderBarsText(HDC hdc)
         }
     }
 }
-
-// seqlock snapshot of each window's command list (avoids reading a half-written frame)
-static DcCmd s_snap[DCWIN_MAXWIN][DCWIN_MAXCMD];
-static int   s_snapN[DCWIN_MAXWIN];
 
 static void SnapWindows(void)
 {
@@ -558,9 +332,8 @@ static void DrawWinText(HDC hdc, DcWindow *w, int wi, BOOL active)
     }
 }
 
-// Composite ONE window completely (fills, then text) so that an overlapping
-// window's text never lands on a window above it. Each layer does its DDraw fills
-// (DC unlocked) then a GetDC/text/ReleaseDC pass before the next layer.
+// Composite ONE window completely (fills, then text) so an overlapping window's
+// text never lands on a window above it.
 static void RenderWindow(int wi, BOOL active)
 {
     HDC       hdc;
@@ -576,18 +349,12 @@ static void Render(void)
     HDC hdc;
     int i;
 
-    if (s_sel < s_top)            s_top = s_sel;
-    if (s_sel >= s_top + VIS)     s_top = s_sel - VIS + 1;
-
     SnapWindows();
 
-    // layer 0: desktop / view
-    if (s_view == VIEW_DESKTOP)
-        RenderDesktopFills();
-    else
-        RenderExplorerFills();
+    // layer 0: desktop
+    RenderDesktopFills();
     hdc = GfxLockDC();
-    if (hdc) { RenderViewText(hdc); GfxUnlockDC(hdc); }
+    if (hdc) { RenderDesktopText(hdc); GfxUnlockDC(hdc); }
 
     // layers 1..N: app windows, back-to-front, each composited fully
     if (s_shared)
@@ -599,7 +366,7 @@ static void Render(void)
             RenderWindow(s_focus, TRUE);
     }
 
-    // top layer: taskbar + start menu
+    // top layer: taskbar + Start menu
     RenderTaskbarFills();
     hdc = GfxLockDC();
     if (hdc) { RenderBarsText(hdc); GfxUnlockDC(hdc); }
@@ -613,38 +380,9 @@ static void ActivateStartItem(void)
     const SHORTCUT *s = &s_start[s_menuSel];
     s_menuOpen = 0;
     if (s->path)
-        LaunchApp(L"dcwexp.exe", s->path);     // Explorer window
+        LaunchApp(L"dcwexp.exe", s->path);     // Explorer window at this path
     else if (s->exe)
         LaunchApp(s->exe, NULL);
-}
-
-static void ActivateExplorerItem(void)
-{
-    ENTRY *e;
-    WCHAR  full[MAX_PATH];
-
-    if (s_sel < 0 || s_sel >= s_count)
-        return;
-    e = &s_ent[s_sel];
-    if (lstrcmpW(e->name, L"..") == 0)
-    {
-        GoParent();
-        return;
-    }
-    if (IsDir(e))
-    {
-        JoinPath(full, s_dir, e->name);
-        lstrcpyW(s_dir, full);
-        ScanDir();
-        return;
-    }
-    if (EndsWithExe(e->name))
-    {
-        JoinPath(full, s_dir, e->name);
-        DbgStr(L"DCSHELL: launching\r\n");
-        LaunchApp(full, NULL);    // non-blocking (windowed apps don't exit)
-        ScanDir();
-    }
 }
 
 static void OnKey(WPARAM wp)
@@ -670,33 +408,23 @@ static void OnKey(WPARAM wp)
 
     if (s_menuOpen)
     {
-        if (wp == VK_UP   && s_menuSel > 0)             s_menuSel--;
+        if (wp == VK_UP   && s_menuSel > 0)              s_menuSel--;
         if (wp == VK_DOWN && s_menuSel < (int)START_N-1) s_menuSel++;
-        if (wp == VK_RETURN)                            ActivateStartItem();
-        if (wp == VK_ESCAPE)                            s_menuOpen = 0;
+        if (wp == VK_RETURN)                             ActivateStartItem();
+        if (wp == VK_ESCAPE)                             s_menuOpen = 0;
         return;
     }
 
-    if (s_view == VIEW_DESKTOP)
+    // desktop
+    if (wp == VK_UP   && s_deskSel > 0)             s_deskSel--;
+    if (wp == VK_DOWN && s_deskSel < (int)DESK_N-1) s_deskSel++;
+    if (wp == VK_RETURN)
     {
-        if (wp == VK_UP   && s_deskSel > 0)             s_deskSel--;
-        if (wp == VK_DOWN && s_deskSel < (int)DESK_N-1) s_deskSel++;
-        if (wp == VK_RETURN)
-        {
-            if (s_desk[s_deskSel].path)
-                LaunchApp(L"dcwexp.exe", s_desk[s_deskSel].path);   // Explorer window
-            else
-                LaunchApp(s_desk[s_deskSel].exe, NULL);
-        }
-        return;
+        if (s_desk[s_deskSel].path)
+            LaunchApp(L"dcwexp.exe", s_desk[s_deskSel].path);   // Explorer window
+        else
+            LaunchApp(s_desk[s_deskSel].exe, NULL);
     }
-
-    // VIEW_EXPLORER
-    if (wp == VK_UP   && s_sel > 0)             s_sel--;
-    if (wp == VK_DOWN && s_sel < s_count - 1)   s_sel++;
-    if (wp == VK_RETURN)                        ActivateExplorerItem();
-    if (wp == VK_BACK)                          GoParent();
-    if (wp == VK_ESCAPE)                        s_view = VIEW_DESKTOP;   // close Explorer
 }
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -705,15 +433,12 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
     case WM_ERASEBKGND:
         return 1;                       // we own the surface
-
     case WM_PAINT:
-        ValidateRect(hwnd, NULL);       // continuous GfxPresent shows the frame; don't storm
+        ValidateRect(hwnd, NULL);       // continuous present shows the frame; don't storm
         return 0;
-
     case WM_KEYDOWN:
         OnKey(wp);
         return 0;
-
     case WM_DESTROY:
         PostQuitMessage(0);
         return 0;
@@ -729,7 +454,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 
     DbgStr(L"DCSHELL: WinMain enter (hybrid desktop)\r\n");
 
-    InitShared();                   // DCWin compositor shared section
+    InitShared();
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc   = WndProc;
@@ -745,8 +470,6 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
         DbgStr(L"DCSHELL: GfxInit failed\r\n");
         return 1;
     }
-
-    ScanDir();
     DbgStr(L"DCSHELL: desktop up\r\n");
 
     next = GetTickCount() + 1000;
@@ -780,7 +503,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
             Render();
             s_dirty = 0;
         }
-        GfxPresent();
+        if (GfxPresent())               // VRAM surface lost+restored -> redraw next frame
+            s_dirty = 1;
         Sleep(33);
     }
 }

@@ -208,7 +208,7 @@ static BOOL CreateSurfaces(void)
     memset(&ddsd, 0, sizeof(ddsd));
     ddsd.dwSize         = sizeof(ddsd);
     ddsd.dwFlags        = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
-    ddsd.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;  // sysmem: never "lost"
+    ddsd.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_VIDEOMEMORY;   // VRAM: fast VRAM->VRAM present
     ddsd.dwWidth        = SCREEN_W;
     ddsd.dwHeight       = SCREEN_H;
     ddsd.ddpfPixelFormat.dwSize        = sizeof(DDPIXELFORMAT);
@@ -328,18 +328,26 @@ void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const 
     ExtTextOutW(hdc, x, y, 0, NULL, text, lstrlenW(text), NULL);
 }
 
-void GfxPresent(void)
+// Returns TRUE if a surface was lost+restored (the back-buffer content is then
+// gone, so the caller must re-render before the next present).
+BOOL GfxPresent(void)
 {
-    HRESULT hr;
-
     if (!s_back || !s_primary)
-        return;
-    hr = IDirectDrawSurface_Blt(s_primary, NULL, s_back, NULL, DDBLT_WAIT, NULL);
-    if (hr == DDERR_SURFACELOST)
+        return FALSE;
+
+    if (IDirectDrawSurface_IsLost(s_back) == DDERR_SURFACELOST)
     {
-        IDirectDrawSurface_Restore(s_primary);   // VRAM primary can be lost; sysmem back can't
+        IDirectDrawSurface_Restore(s_back);
+        if (IDirectDrawSurface_IsLost(s_primary) == DDERR_SURFACELOST)
+            IDirectDrawSurface_Restore(s_primary);
+        return TRUE;                              // back content lost -> need redraw
+    }
+    if (IDirectDrawSurface_Blt(s_primary, NULL, s_back, NULL, DDBLT_WAIT, NULL) == DDERR_SURFACELOST)
+    {
+        IDirectDrawSurface_Restore(s_primary);
         IDirectDrawSurface_Blt(s_primary, NULL, s_back, NULL, DDBLT_WAIT, NULL);
     }
+    return FALSE;
 }
 
 void GfxLaunch(const WCHAR *path)

@@ -38,7 +38,7 @@ void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const 
 // Blit the back buffer to the (volatile) primary. Call every loop iteration so
 // the visible screen always shows the last full frame.
 //
-void GfxPresent(void);
+BOOL GfxPresent(void);   // TRUE if a surface was lost+restored (caller must re-render)
 
 //
 // 16x16 color-keyed icons (built from embedded art into DDraw surfaces). Blit in
