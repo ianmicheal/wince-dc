@@ -1,3 +1,0 @@
-LIBRARY BBA
-EXPORTS
-    InitWDMDriver

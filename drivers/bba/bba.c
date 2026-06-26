@@ -200,4 +200,7 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT drv, PUNICODE_STRING regpath)
     return STATUS_SUCCESS;
 }
 
-BOOL WINAPI DllMain(HANDLE hInst, DWORD reason, LPVOID reserved) { return TRUE; }
+// NB: no DllMain here on purpose - wdm.lib provides the DLL entry (DllMain) that
+// calls InitWDMDriver (imported from wdmlib.dll) which in turn calls our
+// DriverEntry. Defining our own DllMain would override it and the driver would
+// never initialize (the bug that caused LoadWDMDriver -> 1114, no DriverEntry).

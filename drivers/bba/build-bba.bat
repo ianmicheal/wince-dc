@@ -23,8 +23,10 @@ echo [bba] compiling bba.c (SH-4) ...
 if errorlevel 1 (echo [bba] COMPILE FAILED & exit /b 1)
 
 echo [bba] linking bba.dll ...
+rem No /def and no exports: a WDM driver exports nothing (like maple.dll). wdm.lib
+rem supplies the DLL entry (DllMain) that calls InitWDMDriver -> our DriverEntry.
 "%HOSTBIN%\link.exe" /nologo /machine:SH4 /subsystem:windowsce,2.12 /dll ^
-  /entry:DllMain /def:"%~dp0bba.def" /out:"%OUT%\bba.dll" ^
+  /entry:DllMain /out:"%OUT%\bba.dll" ^
   "%OUT%\bba.obj" "%DCSDK%\lib\%DCBT%\wdm.lib" "%DCSDK%\lib\%DCBT%\coredll.lib" "%DCSDK%\lib\%DCBT%\corelibc.lib" > "%OUT%\bba.link.log" 2>&1
 type "%OUT%\bba.link.log"
 echo [bba] errorlevel=%errorlevel%  (out: %OUT%\bba.dll)
