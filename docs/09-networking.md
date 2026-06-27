@@ -178,3 +178,35 @@ transmitter off, after which the kernel's `OEMWriteDebugString` polls `SCFSR2.TD
 2. **Modem (PPP) backend** — backport from `mppp.dll` (in Ghidra): open the modem serial, LCP/auth/
    IPCP, deliver IP directly (no ARP/DHCP), feed IPCP IP+DNS into `NetifOnLease`/`WriteDnsServers`.
    Doesn't fit the Ethernet `LinkOps`; needs its own branch. May be testable via Flycast's modem.
+
+## Running a real retail CE game on our image + shim (2026-06-27)
+Verified **4x4 Evolution** (DC.EXE) booting on our from-SDK **retail** image and going online
+through the shim: dial → "Connected to Internet OK" → contacted `master.4x4evolution.com` →
+live server list, all over the W5500 (DHCP `bound IP`, real TCP/UDP). What it took:
+
+- **Use the RETAIL image** — the game ships on the stock Dragon SDK retail modules. Our debug
+  modules (different sizes/ordinals) made DC.EXE fail `CreateNewProc` and DCMOVIE fault on a
+  debug-ddraw IID. Retail modules are byte-identical for 19/28 (incl. `ddraw`).
+- **Add `mmtimer.dll`** — the one module the game needs that our bib lacked (SDK copy is the exact
+  match). Wire it in `platform.bib`.
+- **Memory: `FSRAMPERCENT=0`** (config.bib) — the game's own `0WINCEOS.BIN` ships `FSRamPercent=0`
+  (no RAM object store → all ~14MB to programs). Our default `0x10101010` reserved ~900KB and the
+  PVR2 translucent-vertex `VirtualAlloc` OOM'd. Tool: `reference/rommods.py` (list a ROM's modules),
+  `reference/romcfg.py` (dump/compare ROMHDR config) — parse the TOC of any DC game's `0WINCEOS.BIN`.
+- **Autorun the game** (`gemini.reg` `[HKLM\init] "Autorun"="\CD-ROM\DC.EXE"`) so no dcshell stays
+  resident (max RAM). **NB: escape backslashes in reg string values** (`\CD-ROM\DC.EXE`) — regcomp
+  chokes on `\C` and silently fails to produce `default.fdf` → makeimg breaks on the next full ROM
+  build. Also: makeimg only rebuilds NK.bin on **module** changes; after a config-only edit
+  (FSRAMPERCENT/reg) **delete NK.bin** to force the ROM rebuild.
+- **Disc:** `make-gdi.ps1 -Image <our 0winceos.bin> -ExtraData c:\dev\gdi2data\data`. make-gdi now
+  copies the OS image **after** the ExtraData robocopy so OUR `0WINCEOS.BIN` overrides the game's.
+
+### RAS phonebook — `ras.c` is registry-backed (not stubbed)
+4x4 (and other dial-era titles) connect via a RAS phonebook, not raw ethernet. The stock `mppp.dll`
+(`rasreg.c`, reversed in Ghidra) backs it with `HKLM\Comm\RasBook\<entry>` (dial params as values
+`User`/`Domain`/`Password`, the RASENTRY as `Entry`) and **auto-creates a default `"Desktop"`**
+entry when empty (`AfdRasMakeDefault`). Our shim originally stubbed these (0 entries) → the game
+said "No dialup properties have been setup". Now `ras.c` enumerates/reads/writes `Comm\RasBook`
+(`RASENTRYNAME.dwSize==0x30`) and auto-creates `Desktop`; `AfdRasDial` stays the instant-connect
+stub (the ethernet link is already up) and the connection state is tracked across dial/hangup
+(`AfdRasEnumConnections`/`GetConnectStatus`).

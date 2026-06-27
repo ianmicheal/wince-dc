@@ -46,6 +46,16 @@ static LinkOps s_w5500 = { "W5500", W5500Probe, W5500Init, W5500Tx, W5500RxPoll 
 static int ModemProbe(void) { return 0; }       // stub: prefer ethernet for now
 static LinkOps s_modem = { "MODEM", ModemProbe, 0, 0, 0 };
 
+// Null backend - no NIC present. A no-op link so microstk STILL gets a valid ifnet and
+// initialises (the stack comes up with just loopback); without it InterfaceInitialize
+// returns 0, microstk wedges on a NULL ifnet, and the whole boot hangs before the shell.
+// The interface stays DOWN (no IP); enable a real link to actually network.
+static int NullInit(unsigned char mac[6])
+{ mac[0]=0x02; mac[1]=0xDC; mac[2]=mac[3]=mac[4]=0; mac[5]=0xFF; return 1; }
+static int NullTx(const unsigned char *f, int n)   { (void)f; (void)n; return 0; }   // drop
+static int NullRxPoll(unsigned char *b, int max)   { (void)b; (void)max; return 0; } // nothing
+static LinkOps s_null = { "NONE", 0, NullInit, NullTx, NullRxPoll };
+
 static LinkOps *s_link;                          // the chosen backend
 static ifnet   *g_ifn;                           // our interface (microstk filled the callbacks)
 static unsigned char g_mac[6];
@@ -354,7 +364,7 @@ int InterfaceInitialize(unsigned short *name, ifnet **ppIf)
         if (s_w5500.probe())      s_link = &s_w5500;   // 1st: dedicated W5500 NIC if present
         else if (s_bba.probe())   s_link = &s_bba;     // 2nd: Broadband Adapter (RTL8139)
         else if (s_modem.probe()) s_link = &s_modem;   // 3rd: dial-up modem (PPP)
-        if (!s_link || !s_link->init) { OutputDebugStringW(L"netif: no link adapter found\r\n"); return 0; }
+        else { s_link = &s_null; OutputDebugStringW(L"netif: no link adapter - stack up on loopback only\r\n"); }
         if (!s_link->init(g_mac))     { OutputDebugStringW(L"netif: link init failed\r\n"); return 0; }
         { WCHAR b[64]; wsprintfW(b, L"netif: link=%S MAC=%02x:%02x:%02x:%02x:%02x:%02x\r\n",
             s_link->name, g_mac[0],g_mac[1],g_mac[2],g_mac[3],g_mac[4],g_mac[5]); OutputDebugStringW(b); }
@@ -373,7 +383,8 @@ int InterfaceInitialize(unsigned short *name, ifnet **ppIf)
     if (!g_ifn)                                 // first interface = the live one
     {
         g_ifn = ifn;
-        CloseHandle(CreateThread(0, 0, NetWorker, 0, 0, 0));
+        if (s_link != &s_null)                  // no worker/DHCP when there's no real NIC
+            CloseHandle(CreateThread(0, 0, NetWorker, 0, 0, 0));
     }
     return 1;
 }

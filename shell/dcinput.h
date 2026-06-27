@@ -13,6 +13,9 @@ BOOL DInInit(HWND hwnd);     // TRUE if a DI keyboard was acquired (use it, not 
 void DInShutdown(void);
 void DInUpdate(void);        // poll all devices; call once per loop
 
+void DInRelease(void);       // hand input to a launched full-screen app (drop our acquire)
+void DInReacquire(void);     // app exited: take input back (re-primed, no phantom edge)
+
 int  DInNextKey(DWORD *vk);  // 1 + VK for each queued key-down (edge / auto-repeat)
 int  DInHasPointer(void);    // TRUE if a mouse or controller pointer is active
 void DInCursor(int *x, int *y);

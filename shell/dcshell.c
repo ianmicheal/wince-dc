@@ -128,8 +128,10 @@ static void ShellLaunch(const WCHAR *exe)
         LaunchApp(exe, NULL);                 // windowed, composited
     else
     {
-        DbgStr(L"DCSHELL: fullscreen launch (display hand-off)\r\n");
-        GfxLaunch(exe);                       // release display -> run -> reclaim
+        DbgStr(L"DCSHELL: fullscreen launch (display + input hand-off)\r\n");
+        DInRelease();                         // hand input to the app (it may grab DI exclusively)
+        GfxLaunch(exe);                       // release display -> run (blocks) -> reclaim
+        DInReacquire();                       // app exited -> take input back
         s_dirty = 1;
         s_deskDirty = 1;                      // surfaces/icons rebuilt -> recache desktop
     }

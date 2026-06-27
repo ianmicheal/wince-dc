@@ -142,6 +142,31 @@ void DInShutdown(void)
     if (g_di)    { IDirectInput_Release(g_di); g_di = NULL; }
 }
 
+// Hand the input devices to a launched full-screen app (e.g. a DirectInput game):
+// drop OUR acquisition so the app's Acquire (often EXCLUSIVE) succeeds. We keep the
+// device objects so we can re-Acquire when the app exits (DInReacquire).
+void DInRelease(void)
+{
+    if (g_kbd)   IDirectInputDevice2_Unacquire(g_kbd);
+    if (g_mouse) IDirectInputDevice2_Unacquire(g_mouse);
+    if (g_joy)   IDirectInputDevice2_Unacquire(g_joy);
+    OutputDebugStringW(L"DCIN: released input to app\r\n");
+}
+
+// App exited: take input back. Re-prime edge detection + clear the key snapshot so a
+// key/button still held at hand-back doesn't fire a phantom press into the shell.
+void DInReacquire(void)
+{
+    if (g_kbd)   IDirectInputDevice2_Acquire(g_kbd);
+    if (g_mouse) IDirectInputDevice2_Acquire(g_mouse);
+    if (g_joy)   IDirectInputDevice2_Acquire(g_joy);
+    memset(g_now, 0, sizeof(g_now));
+    memset(g_last, 0, sizeof(g_last));
+    g_joyPrimed = 0; g_mousePrimed = 0;
+    g_qh = g_qt = 0;                 // drop any queued keys from before the hand-off
+    OutputDebugStringW(L"DCIN: reacquired input\r\n");
+}
+
 void DInUpdate(void)
 {
     DWORD nowt = GetTickCount();

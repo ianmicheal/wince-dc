@@ -25,11 +25,13 @@ if (-not (Test-Path "$Utils\ip.bin"))      { throw "ip.bin not found in $Utils" 
 $data = Join-Path $OutDir "data"
 Remove-Item $OutDir -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $data | Out-Null
-Copy-Item $Image (Join-Path $data "0WINCEOS.BIN") -Force
 if ($ExtraData -ne "" -and (Test-Path $ExtraData)) {
   Write-Host "Staging extra CD-ROM files from $ExtraData ..."
   robocopy $ExtraData $data /E /NFL /NDL /NJH /NJS /NP | Out-Null
 }
+# OUR OS image wins: copy it LAST so it overrides any 0WINCEOS.BIN in -ExtraData
+# (e.g. a real game's GDI ships its own OS, but we boot ours + the game's data).
+Copy-Item $Image (Join-Path $data "0WINCEOS.BIN") -Force
 $gdi = Join-Path $OutDir "disc.gdi"
 Copy-Item "$Utils\Half-Life.GDI" $gdi -Force
 
