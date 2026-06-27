@@ -49,6 +49,13 @@ absent=off so BBA/Flycast untouched). Modem (PPP) backend NOT started.
 dcspi.dll + remove standalone bba.dll; reginit.ini/gemini.reg remove `[HKLM\WDMDrivers\BuiltIn\BBA]`.
 Diagnostic OutputDebugStrings in netif.c/w5500.c — strip when stable.
 
-**NEXT**: (1) emulate W5500 in Flycast (`c:/dev/pc/flycast`) to make it testable — virtual W5500 on
-the SCI bus (byte-level hook in core/hw/sh4/modules/serial.cpp; CS via BSC_PDTRA in bsc.cpp) reusing
-the host NAT bridge (net::modbba / bba_recv_frame). (2) Modem (PPP) backport from mppp.dll.
+**W5500 FLYCAST EMU BUILT (2026-06-27)**: virtual W5500 added to flycast (`c:/dev/pc/flycast`
+`core/hw/w5500/`, env `FLYCAST_W5500=1`; SCI byte hook in serial.cpp, CS via BSC_PDTRA bit7, MACRAW
+bridged via net::modbba/bba_recv_frame). Committed + PUSHED on flycast master `d51495b79` (+
+katana-devkit). `run_w5500.bat` launches it; DC disc now bakes `HKLM\Comm\Netif\W5500Bus=1`.
+TEST: W5500 **detected over SPI** (`w5500: up on bus 1`, `netif: link=W5500`) — SCI/CS/VERSIONR
+works. BUT networking over it doesn't complete (dcwnet silent) — DHCP/TCP not flowing. **WIP**:
+next instrument w5500.cpp TX/RX (frames reaching receiveEthFrame? rxQueue filling? worker starved
+by slow per-byte SCI SPI?).
+
+**NEXT**: (1) debug W5500 data path (detection done, DHCP/TCP not). (2) Modem (PPP) backport from mppp.dll.

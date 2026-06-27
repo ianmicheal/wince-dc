@@ -212,3 +212,18 @@ over Ethernet. **Result: BBA path verified end-to-end in Flycast — DHCP → DN
   `bba_recv_frame`, picotcp) is fully reusable for MACRAW frames. Plan in `docs/09-networking.md`.
 - **Strip later:** diagnostic `OutputDebugString`s in `netif.c` (`netif TX[]/RX[]`, DNS write) +
   `w5500.c`.
+
+### W5500 + Flycast emulation (2026-06-27)
+- Added the **W5500/MACRAW backend** (`net/netif/w5500.c`) + a reusable **SPI transport**
+  (`drivers/dcspi/` — SH-4 SCI hardware-SPI + SCIF bit-bang, ported from KOS). Detect ladder
+  reordered to W5500→BBA→modem; W5500 gated by `HKLM\Comm\Netif\W5500Bus` (1=SCI/PA7-CS,
+  2=SCIF/RTS-CS; absent=off so the BBA path is untouched). dcspi loaded on demand.
+- To make the (otherwise hardware-only) W5500 path testable, **emulated a virtual W5500 in
+  Flycast** (`c:/dev/pc/flycast`, `core/hw/w5500/`, env `FLYCAST_W5500=1`): SCI byte hook in
+  serial.cpp, CS via BSC_PDTRA bit7, MACRAW frames bridged through the existing host NAT
+  (`net::modbba::receiveEthFrame` / `bba_recv_frame`). Built on **flycast master** (Ninja/MSVC,
+  VS18 → `build-w5500/flycast.exe`); committed + pushed (master `d51495b79`, also katana-devkit).
+- **Test (2026-06-27)**: W5500 **detected over SPI** (`w5500: up on bus 1`, `netif: link=W5500`) —
+  SCI/CS/VERSIONR path proven. BUT networking over it doesn't complete (dcwnet silent on Enter) —
+  DHCP/TCP not flowing. **WIP** (next: TX/RX logging in w5500.c). Detection ≠ data path yet.
+- Pushed both repos: wince-dc + flycast (master + katana-devkit).

@@ -111,11 +111,11 @@ build-asm.bat    retail [file.src]     :: assemble one SHX shasm source (-cpu=SH
 Userland now boots to a windowed desktop shell running winsock apps, and the **BBA networking path
 is complete + verified in Flycast** (DHCP→DNS→TCP→HTTP on the stock stack via our `mppp.dll` shim).
 Next on this track:
-1. **Emulate the W5500 in Flycast** (sources `c:/dev/pc/flycast`) so the W5500/dcspi path + an
-   autodetect become testable instead of blind: a virtual W5500 on the **SCI bus** (byte-level hook
-   in `core/hw/sh4/modules/serial.cpp`; CS via `BSC_PDTRA` bit7 in `bsc.cpp`) bridging MACRAW frames
-   through the existing host NAT (`net::modbba::receiveEthFrame` / dispatch in `bba_recv_frame`).
-   Investigation done; impl not started (stopped here). See `docs/09-networking.md` §Next.
+1. **Debug W5500 networking.** The Flycast W5500 emulation is BUILT + pushed (flycast master
+   `d51495b79`, `core/hw/w5500/`, env `FLYCAST_W5500=1`; `run_w5500.bat`); the disc bakes
+   `HKLM\Comm\Netif\W5500Bus=1`. Test: the W5500 is **detected over SPI** (`w5500: up on bus 1`,
+   `netif: link=W5500`) — SCI/CS/VERSIONR works — but networking over it doesn't complete (dcwnet
+   silent). WIP: instrument `w5500.cpp` TX/RX. See `docs/09-networking.md` §"Flycast W5500 emulation".
 2. **Modem (PPP) backend** — backport from `mppp.dll` (in Ghidra): serial + LCP/auth/IPCP → feed
    IPCP IP+DNS into `NetifOnLease`/`WriteDnsServers`. Doesn't fit the Ethernet `LinkOps`.
 Reminder: the SDK-side image edits (deploy mppp/dcspi, ce.bib/reginit.ini) are NOT in the repo —

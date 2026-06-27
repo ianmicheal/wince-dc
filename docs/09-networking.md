@@ -115,14 +115,27 @@ The standalone `drivers/bba` WDM driver is **retired** in favour of `bba_hw.c` i
 - Diagnostic logs in `netif.c` (`netif:`/`netif TX[]`/`netif RX[]`/`DNS write`) + `w5500.c` —
   strip when stable.
 
+## Flycast W5500 emulation (IMPLEMENTED 2026-06-27 — on `maximqaxd/flycast` master)
+
+To make the otherwise-blind W5500 path testable, a virtual W5500 was added to Flycast
+(`c:/dev/pc/flycast`, committed on **master** `d51495b79`, also on `katana-devkit`):
+- `core/hw/w5500/w5500.{h,cpp}` — virtual chip: register file + socket-0 MACRAW ring + the SPI
+  command FSM; bridges MACRAW frames through the **existing** host NAT (TX →
+  `net::modbba::receiveEthFrame`; RX ← dispatch in `bba_recv_frame`). Enabled by env `FLYCAST_W5500=1`.
+- SCI byte path hooked in `core/hw/sh4/modules/serial.cpp` (clocked-sync mode, bit-reversed like the
+  real driver); CS = PA7 / `BSC_PDTRA` bit7 in `bsc.cpp`; `picoppp.cpp` forced to ethernet mode when
+  active. `run_w5500.bat` launches it (`FLYCAST_W5500=1` + the disc + BIOS). Build: master, Ninja/MSVC
+  (VS18), `build-w5500/flycast.exe`. DC side: `HKLM\Comm\Netif\W5500Bus=1` (now baked into the disc).
+
+**Test result (2026-06-27)**: the W5500 is **detected over SPI** — `w5500: up on bus 1 MAC=...` +
+`netif: link=W5500`. So the SCI/CS/VERSIONR path works. BUT the **network probe doesn't complete**
+(dcwnet shows nothing on Enter) — DHCP/connect over the W5500 isn't flowing yet. WIP: likely the
+SPI TX/RX ring or the host-bridge dispatch for the W5500 RX path; next is to add TX/RX logging in
+`w5500.cpp` (frames reaching `receiveEthFrame`? frames arriving via the rxQueue?) and check the
+netif worker isn't starved by slow per-byte SCI SPI.
+
 ## Next
-1. **Emulate the W5500 in Flycast** (sources at `c:/dev/pc/flycast`) so the W5500 + dcspi + an
-   autodetect become testable. Plan: a virtual W5500 device (register file + socket-0 MACRAW ring)
-   on the **SCI bus** (byte-level: hook `SCTDR1` write in `core/hw/sh4/modules/serial.cpp`, which
-   today registers SCI as dumb RW cells; CS via `BSC_PDTRA` bit7 in `bsc.cpp`), bridging MACRAW
-   frames through the **existing** host NAT: TX → `net::modbba::receiveEthFrame` (`netservice.cpp`),
-   RX ← dispatch inside `bba_recv_frame` (`bba.cpp`, the single host→DC entry both
-   `picoppp.cpp`/`dcnet.cpp` use). SCIF-SPI would need bit-level SCSPTR2 modeling — skip; use SCI.
+1. **Debug W5500 networking** (detection works; DHCP/TCP doesn't) — instrument `w5500.cpp` TX/RX.
 2. **Modem (PPP) backend** — backport from `mppp.dll` (in Ghidra): open the modem serial, LCP/auth/
    IPCP, deliver IP directly (no ARP/DHCP), feed IPCP IP+DNS into `NetifOnLease`/`WriteDnsServers`.
    Doesn't fit the Ethernet `LinkOps`; needs its own branch. May be testable via Flycast's modem.
