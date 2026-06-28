@@ -541,6 +541,16 @@ void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const 
     }
 }
 
+int GfxTextWidth(HFONT font, const WCHAR *text)
+{
+    int fi = (font == g_FontBold) ? 1 : (font == g_FontTitle) ? 2 : 0, w = 0;
+    const WCHAR *p;
+    if (!s_glyphReady) return 0;
+    for (p = text; *p; p++)
+    { WCHAR ch = (*p < GFIRST || *p > GLAST) ? '?' : *p; w += s_glyph[fi][ch - GFIRST].adv; }
+    return w;
+}
+
 // --- desktop cache as a vertex sub-list -----------------------------------------
 void GfxBeginDesktopCache(void)
 {

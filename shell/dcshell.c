@@ -74,15 +74,28 @@ static int   s_wmMouseSeen = 0;  // logged once when GWES mouse messages arrive
 static int   s_cx = SCREEN_W / 2, s_cy = SCREEN_H / 2;   // pointer position
 
 // Desktop icon cell positions (top-left of the 96x54 clickable cell). Mutable so icons can
-// be dragged. Initialised to the default left column by DeskPosInit().
+// be dragged. Initialised to a column-major grid by DeskPosInit() - icons flow top-to-bottom
+// then wrap into the next column so they never run under the taskbar.
 static POINT s_deskPos[DESK_N];
 static int   s_deskPosInit = 0;
+static int   s_deskRows    = 6;   // icons per column (computed from the usable height)
 #define ICELL_W 96
 #define ICELL_H 54
+#define DESK_X0 14
+#define DESK_Y0 16
+#define DESK_DY 70                // row pitch
+#define DESK_DX (ICELL_W + 12)    // column pitch
 static void DeskPosInit(void)
 {
-    int i;
-    for (i = 0; i < (int)DESK_N; i++) { s_deskPos[i].x = 14; s_deskPos[i].y = 24 + i * 76; }
+    int i, row = 0, col = 0;
+    s_deskRows = (TASK_Y - DESK_Y0) / DESK_DY;
+    if (s_deskRows < 1) s_deskRows = 1;
+    for (i = 0; i < (int)DESK_N; i++)
+    {
+        s_deskPos[i].x = DESK_X0 + col * DESK_DX;
+        s_deskPos[i].y = DESK_Y0 + row * DESK_DY;
+        if (++row >= s_deskRows) { row = 0; col++; }
+    }
     s_deskPosInit = 1;
 }
 
@@ -267,10 +280,12 @@ static void RenderDesktopFills(void)
     GfxFill(0, 0, SCREEN_W, TASK_Y, CL_DESKTOP);
     for (i = 0; i < (int)DESK_N; i++)
     {
+        int lw = GfxTextWidth(g_FontUI, s_desk[i].label), lx;
         x = s_deskPos[i].x; y = s_deskPos[i].y;
+        lx = x + ICELL_W / 2 - lw / 2;                           // label centred under the icon
         if (i == s_deskSel && !s_menuOpen)
-            GfxFill(x, y + 36, x + ICELL_W, y + 52, CL_TITLE);   // label highlight
-        GfxIconBig(s_desk[i].icon, x + 32, y);                   // 32x32 icon
+            GfxFill(lx - 3, y + 36, lx + lw + 3, y + 52, CL_TITLE);   // selection box hugs the label
+        GfxIconBig(s_desk[i].icon, x + 32, y);                   // 32x32 icon (centred in the 96px cell)
     }
 }
 
@@ -280,8 +295,10 @@ static void RenderDesktopText(HDC hdc)
     for (i = 0; i < (int)DESK_N; i++)
     {
         COLORREF bg = (i == s_deskSel && !s_menuOpen) ? CL_TITLE : CL_DESKTOP;
+        int lw = GfxTextWidth(g_FontUI, s_desk[i].label), lx;
         x = s_deskPos[i].x; y = s_deskPos[i].y;
-        GfxText(hdc, x + 4, y + 37, CL_WHITE, bg, g_FontUI, s_desk[i].label);
+        lx = x + ICELL_W / 2 - lw / 2;
+        GfxText(hdc, lx, y + 37, CL_WHITE, bg, g_FontUI, s_desk[i].label);
     }
 }
 
@@ -552,10 +569,15 @@ static void OnKey(WPARAM wp)
         return;
     }
 
-    // desktop
+    // desktop - grid navigation (column-major: index = col*rows + row)
     s_dirty = 1;
-    if (wp == VK_UP   && s_deskSel > 0)             s_deskSel--;
-    if (wp == VK_DOWN && s_deskSel < (int)DESK_N-1) s_deskSel++;
+    {
+        int row = s_deskSel % s_deskRows;
+        if (wp == VK_UP    && row > 0)                                  s_deskSel--;
+        if (wp == VK_DOWN  && row < s_deskRows - 1 && s_deskSel + 1 < (int)DESK_N) s_deskSel++;
+        if (wp == VK_LEFT  && s_deskSel - s_deskRows >= 0)             s_deskSel -= s_deskRows;
+        if (wp == VK_RIGHT && s_deskSel + s_deskRows < (int)DESK_N)    s_deskSel += s_deskRows;
+    }
     if (wp == VK_RETURN)
     {
         if (s_desk[s_deskSel].path)

@@ -33,6 +33,7 @@ void GfxBevel(const RECT *rc, BOOL raised);
 HDC  GfxLockDC(void);
 void GfxUnlockDC(HDC hdc);
 void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const WCHAR *text);
+int  GfxTextWidth(HFONT font, const WCHAR *text);   // pixel width of text in the given font
 
 //
 // Present the composited scene + pointer via the page-flip chain (Blt scene->back
