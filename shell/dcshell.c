@@ -820,16 +820,24 @@ static void DragHitTest(int x, int y)
     }
 }
 
+// Drop a desktop icon to (x,y): clamp into the desktop and persist if it's a user shortcut.
+static void DropIcon(int target, int x, int y)
+{
+    int nx = x - s_dragOffX, ny = y - s_dragOffY;
+    if (nx < 0) nx = 0; if (nx > SCREEN_W - ICELL_W) nx = SCREEN_W - ICELL_W;
+    if (ny < 0) ny = 0; if (ny > TASK_Y - ICELL_H)   ny = TASK_Y - ICELL_H;
+    s_deskPos[target].x = nx; s_deskPos[target].y = ny;
+    s_deskDirty = 1;                                 // icons live in the cached desktop layer
+    if (target < s_deskN && s_deskUser[target] >= 0) SaveShortcuts();
+}
+
 // Apply a drag while the pointer is held + has moved past the threshold.
 static void DragApply(int x, int y)
 {
-    if (s_dragKind == DRAG_ICON && s_dragTarget >= 0)
+    if (s_dragKind == DRAG_ICON)
     {
-        int nx = x - s_dragOffX, ny = y - s_dragOffY;
-        if (nx < 0) nx = 0; if (nx > SCREEN_W - ICELL_W) nx = SCREEN_W - ICELL_W;
-        if (ny < 0) ny = 0; if (ny > TASK_Y - ICELL_H)   ny = TASK_Y - ICELL_H;
-        s_deskPos[s_dragTarget].x = nx; s_deskPos[s_dragTarget].y = ny;
-        s_deskDirty = 1;                            // icons live in the cached desktop layer
+        // Windows-style: the original icon stays put; a translucent ghost (drawn by GfxPresent
+        // at the cursor) tracks the drag, and the icon commits to the new spot on drop.
     }
     else if (s_shared && s_dragTarget >= 0 && s_shared->win[s_dragTarget].inUse)
     {
@@ -969,9 +977,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
                         AddDesktopShortcut(s_dragTarget, s_cx, s_cy);
                     s_menuOpen = 0;
                 }
-                else if (s_dragKind == DRAG_ICON && s_dragTarget >= 0 &&
-                         s_dragTarget < s_deskN && s_deskUser[s_dragTarget] >= 0)
-                    SaveShortcuts();                         // persist a moved user shortcut
+                else if (s_dragKind == DRAG_ICON && s_dragTarget >= 0 && s_dragTarget < s_deskN)
+                    DropIcon(s_dragTarget, s_cx, s_cy);      // commit the icon to the drop point
                 s_dragKind = DRAG_NONE; s_dragTarget = -1; s_dragMoved = 0; s_dirty = 1;
             }
             s_ptrWas = ptr;
@@ -1000,6 +1007,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
                 if (g != s_lastGen[i]) { s_dirty = 1; s_lastGen[i] = g; }
                 if (!s_shared->win[i].inUse) { s_winMax[i] = 0; s_winMin[i] = 0; }   // freed slot -> normal
             }
+        // Drag ghost: a translucent icon trails the cursor while a drag is in flight.
+        if (s_dragMoved && s_dragKind == DRAG_ICON && s_dragTarget >= 0 && s_dragTarget < s_deskN)
+            GfxSetDragGhost(s_desk[s_dragTarget].icon);
+        else if (s_dragMoved && s_dragKind == DRAG_STARTITEM && s_dragTarget >= 0 && s_dragTarget < (int)START_N)
+            GfxSetDragGhost(s_start[s_dragTarget].icon);
+        else
+            GfxSetDragGhost(-1);
         // The scene is a PVR2 quad list that GfxPresent consumes + clears, so we MUST
         // Render() (rebuild quads) before every present - a bare present would submit
         // an empty scene. Rebuild is cheap (no rasterization), so recompose+present on

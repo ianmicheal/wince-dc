@@ -579,10 +579,21 @@ void GfxBlitDesktopCache(void)
 }
 
 // --- present: the only D3D-talking path -----------------------------------------
+static int s_ghostIcon = -1;
+void GfxSetDragGhost(int iconId) { s_ghostIcon = iconId; }
+
 BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor)
 {
     int i;
     if (!s_d3dOk || !s_dev || !s_primary) return FALSE;
+
+    if (s_ghostIcon >= 0 && s_ghostIcon < ICON_COUNT)  // drag ghost: translucent 32x32 under cursor
+    {
+        RectUV *u = &s_iconUV[s_ghostIcon][1];
+        int gx = cursorX - 6, gy = cursorY - 4;        // carried just below-right of the pointer tip
+        PushQuad((float)gx, (float)gy, (float)(gx + 32), (float)(gy + 32),
+                 u->u0, u->v0, u->u1, u->v1, 0xB0FFFFFF, 1);   // ~0.69 alpha (blend is SRCALPHA)
+    }
 
     if (showCursor)                                  // cursor = ICON_CURSOR quad, drawn last (top)
     {

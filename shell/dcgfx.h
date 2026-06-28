@@ -50,6 +50,7 @@ BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor);
 //
 void GfxIcon(int id, int x, int y);      // 16x16
 void GfxIconBig(int id, int x, int y);   // 32x32
+void GfxSetDragGhost(int iconId);        // translucent 32x32 icon trailing the cursor (-1 = off)
 
 // Compositor clip rect: subsequent fills/text/icons are clipped to [x0,y0)-(x1,y1).
 // Used to clip a window's client content to its (resizable) client area.
