@@ -42,12 +42,16 @@ DWORD SetKMode(DWORD fMode);            // coredll export (P4 control regs need 
 #define SC_TDRE 0x80
 #define SC_RDRF 0x40
 #define SC_ORER 0x20
+#define SCSSR_FER 0x10          // SCSSR1 framing error (distinct from SCSCR1 RE=0x10)
+#define SCSSR_PER 0x08          // SCSSR1 parity error
 #define SC_TE   0x20
 #define SC_RE   0x10
 #define SC_CA   0x80            // SCSMR1: synchronous (clocked) mode
 #define STBCR_SCI 0x01          // SCI module standby bit
 #define PA7_BIT   7
-#define SCI_BRR   3             // n=0 -> ~3.125 MHz (50MHz/(4*(BRR+1))); bump to 1 = 6.25 MHz
+#define SCI_BRR   1             // n=0 -> 6.25 MHz (50MHz/(4*(BRR+1))); =3 was 3.125, =0 is 12.5
+                                // 6.25 MHz halves per-frame SPI time (W5500 handles >25 MHz) so
+                                // full-size RX frames drain before the 16K W5500 ring overflows.
 #define SCI_WAIT  500000
 
 static int s_scifUp, s_sciUp, s_sciCs;
@@ -114,6 +118,8 @@ static BYTE scif_rw_raw(BYTE b)
         SCSPTR2 = (WORD)(tmp | bit | P2_CTSDT);      // clock high (rising edge)
         rv = (BYTE)((rv << 1) | (SCSPTR2 & P2_SPB2DT));
     }
+    SCSPTR2 = tmp;                                   // leave SCK idle LOW (SPI mode 0) so the
+                                                     // next byte's first rising edge isn't a glitch
     return rv;
 }
 
@@ -151,7 +157,7 @@ static int sci_init_raw(int csmode)
     SCSMR1 = SC_CA;                                  // 8-bit synchronous, CKS=0 (n=0)
     SCBRR1 = SCI_BRR;
     Sleep(1);
-    SCSSR1 &= ~(SC_ORER);
+    SCSSR1 &= ~(SC_ORER | SCSSR_FER | SCSSR_PER);    // clear all RX errors (KOS clear_sci_errors)
     if (SCSSR1 & SC_RDRF) { d = SCRDR1; (void)d; }   // flush
     SCSCR1 = SC_TE | SC_RE;                          // internal clock, full-duplex
     do { if (++t > SCI_WAIT) return -1; } while (!(SCSSR1 & SC_TDRE));

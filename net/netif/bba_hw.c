@@ -8,18 +8,94 @@
 
 DWORD SetKMode(DWORD fMode);          // coredll export (P2/G2 needs kernel mode)
 
+// The G2 bus is shared with the AICA (sound) + its DMA engines. On real silicon a PIO
+// burst that is interleaved by another G2 master - an IRQ-context G2 access, or a G2 DMA
+// in flight - corrupts/locks the bus (Flycast tolerates it, which is why this only bites
+// on hardware). So we match KallistiOS g2_lock()/g2_unlock() (dc/g2bus.h) around EVERY
+// transaction: mask interrupts + suspend G2 DMA + drain the SH4/G2 FIFO. Interrupt
+// masking is an SH-4 asm stub (g2lock.src) - the MS SH compiler has no IMASK intrinsic;
+// it is privileged (SR.MD=1), legal because every accessor runs under SetKMode(TRUE).
+extern unsigned long DcIrqDisable(void);           // SR.IMASK<-0xF, returns old SR
+extern void          DcIrqRestore(unsigned long);  // SR<-old
+
 #define G2_FIFO_STATUS  (*(volatile DWORD *)0xA05F688C)
-#define FIFO_AICA       0x0001
-#define FIFO_G2         0x0010
-static void g2_fifo_wait(void) { int i; for (i = 0; i < 0x1800; i++) if (!(G2_FIFO_STATUS & (FIFO_AICA | FIFO_G2))) break; }
-static BYTE  g2_read_8 (DWORD a) { g2_fifo_wait(); return *(volatile BYTE  *)a; }
-static WORD  g2_read_16(DWORD a) { g2_fifo_wait(); return *(volatile WORD  *)a; }
-static DWORD g2_read_32(DWORD a) { g2_fifo_wait(); return *(volatile DWORD *)a; }
-static void  g2_write_8 (DWORD a, BYTE  v) { g2_fifo_wait(); *(volatile BYTE  *)a = v; }
-static void  g2_write_16(DWORD a, WORD  v) { g2_fifo_wait(); *(volatile WORD  *)a = v; }
-static void  g2_write_32(DWORD a, DWORD v) { g2_fifo_wait(); *(volatile DWORD *)a = v; }
-static void g2_read_block(BYTE *d, DWORD a, int n)  { int i; for (i = 0; i < n; i++) { if (!(i & 31)) g2_fifo_wait(); d[i] = *(volatile BYTE *)(a + i); } }
-static void g2_write_block(DWORD a, const BYTE *s, int n) { int i; for (i = 0; i < n; i++) { if (!(i & 31)) g2_fifo_wait(); *(volatile BYTE *)(a + i) = s[i]; } }
+#define FIFO_G2         0x0010        // bit4: G2 write FIFO non-empty
+#define FIFO_SH4        0x0020        // bit5: SH4 write FIFO non-empty
+#define G2_DMA_SUSP_SPU (*(volatile DWORD *)0xA05F781C)   // suspend = 1, resume = 0
+#define G2_DMA_SUSP_BBA (*(volatile DWORD *)0xA05F783C)
+#define G2_DMA_SUSP_CH2 (*(volatile DWORD *)0xA05F785C)
+
+// Drain until both the SH4->G2 store FIFO and the G2 FIFO are empty (KOS mask G2|SH4;
+// the old code wrongly waited on AICA|G2 and missed the SH4 store FIFO).
+static void g2_fifo_wait(void) { int i; for (i = 0; i < 0x1800; i++) if (!(G2_FIFO_STATUS & (FIFO_G2 | FIFO_SH4))) break; }
+
+// G2 access guard, taken per SHORT burst (one register, or one 32-byte chunk of a packet
+// copy - see the block fns). Suspends all G2 DMA + drains the SH4/G2 FIFO + masks interrupts,
+// so the burst is atomic vs every other G2 master: AICA sound (its DMA *and* its ISR's PIO)
+// and the G2-DMA-complete ISR. The IRQ mask is REQUIRED for sound coexistence - a WinCE game
+// using our shim can have AICA audio whose interrupt handler pokes G2, and that must not
+// interleave a burst. The catch is the MAPLE bus (controllers/keyboard, a SEPARATE bus):
+// masking IRQs too long starves its poll and breaks controller input. So every locked window
+// is kept TINY - the block copies re-lock every 32 bytes (the G2 FIFO size) and run UNLOCKED
+// between chunks, letting Maple + the AICA ISR be serviced ~once per 32 bytes. Short windows
+// are both sound-safe and Maple-safe; the bug was locking once around a whole ~1.5KB packet.
+static unsigned long g2_lock(void)
+{
+    unsigned long sr = DcIrqDisable();
+    G2_DMA_SUSP_SPU = 1; G2_DMA_SUSP_BBA = 1; G2_DMA_SUSP_CH2 = 1;
+    g2_fifo_wait();
+    return sr;
+}
+static void g2_unlock(unsigned long sr)
+{
+    G2_DMA_SUSP_SPU = 0; G2_DMA_SUSP_BBA = 0; G2_DMA_SUSP_CH2 = 0;
+    DcIrqRestore(sr);
+}
+
+static BYTE  g2_read_8 (DWORD a) { unsigned long lk=g2_lock(); BYTE  v=*(volatile BYTE  *)a; g2_unlock(lk); return v; }
+static WORD  g2_read_16(DWORD a) { unsigned long lk=g2_lock(); WORD  v=*(volatile WORD  *)a; g2_unlock(lk); return v; }
+static DWORD g2_read_32(DWORD a) { unsigned long lk=g2_lock(); DWORD v=*(volatile DWORD *)a; g2_unlock(lk); return v; }
+static void  g2_write_8 (DWORD a, BYTE  v) { unsigned long lk=g2_lock(); *(volatile BYTE  *)a = v; g2_unlock(lk); }
+static void  g2_write_16(DWORD a, WORD  v) { unsigned long lk=g2_lock(); *(volatile WORD  *)a = v; g2_unlock(lk); }
+static void  g2_write_32(DWORD a, DWORD v) { unsigned long lk=g2_lock(); *(volatile DWORD *)a = v; g2_unlock(lk); }
+// Block ops lock ONCE around the whole loop (as KOS g2_*_block does), draining the FIFO
+// every 32 bytes within the held lock.
+static void g2_read_block(BYTE *d, DWORD a, int n)  { unsigned long lk=g2_lock(); int i; for (i = 0; i < n; i++) { if (i && !(i & 31)) g2_fifo_wait(); d[i] = *(volatile BYTE *)(a + i); } g2_unlock(lk); }
+static void g2_write_block(DWORD a, const BYTE *s, int n) { unsigned long lk=g2_lock(); int i; for (i = 0; i < n; i++) { if (i && !(i & 31)) g2_fifo_wait(); *(volatile BYTE *)(a + i) = s[i]; } g2_unlock(lk); }
+// 32-bit block copies for the RTL8139 DMA window (the GAPS-mapped RX/TX frame buffers).
+// The GAPS bridge + G2 bus latch 32-bit; sub-word (byte) access to the DMA window returns
+// or writes INCOHERENT bytes on real silicon (Flycast returns clean bytes either way, which
+// is why byte copies "worked" there). KOS uses g2_read_block_32/g2_write_block_32 for the
+// frame body and byte access ONLY for the GAPS config-register signature. Length is rounded
+// up to a dword; both buffers are 4-aligned and sized >= the rounded length (RX off and TX
+// buf are dword-aligned; the SH-4 frame buffers are stack/aligned). FIFO drains every 8 dw.
+// Lock per 8-dword (32-byte = one G2 FIFO) chunk, NOT once around the whole packet: each
+// chunk is IRQ-masked + atomic, but IRQs (Maple poll, AICA ISR) run between chunks. A 1.5KB
+// frame is ~47 chunks, so Maple is serviced ~47x per packet instead of being starved for it.
+static void g2_read_block32(BYTE *d, DWORD a, int n)
+{
+    int dw = (n + 3) >> 2, i = 0; DWORD *p = (DWORD *)d;
+    while (i < dw)
+    {
+        int e = i + 8; unsigned long lk;
+        if (e > dw) e = dw;
+        lk = g2_lock();
+        for (; i < e; i++) p[i] = *(volatile DWORD *)(a + (DWORD)i * 4);
+        g2_unlock(lk);
+    }
+}
+static void g2_write_block32(DWORD a, const BYTE *s, int n)
+{
+    int dw = (n + 3) >> 2, i = 0; const DWORD *p = (const DWORD *)s;
+    while (i < dw)
+    {
+        int e = i + 8; unsigned long lk;
+        if (e > dw) e = dw;
+        lk = g2_lock();
+        for (; i < e; i++) *(volatile DWORD *)(a + (DWORD)i * 4) = p[i];
+        g2_unlock(lk);
+    }
+}
 
 #define GAPS_BASE   0xA1000000
 #define RTL_DMA     0x01840000
@@ -37,11 +113,30 @@ static void g2_write_block(DWORD a, const BYTE *s, int n) { int i; for (i = 0; i
 #define RT_INTRSTATUS 0x3e
 #define RT_TXCONFIG 0x40
 #define RT_RXCONFIG 0x44
+#define RT_RXMISSED  0x4C    // missed-packet counter (write clears)
+#define RT_CFG9346   0x50    // 93C46 EEPROM command / config-write unlock
+#define RT_CONFIG1   0x52
+#define RT_CONFIG4   0x5A
+#define RT_MULTIINTR 0x5C
+#define RT_MII_BMCR  0x62    // PHY basic-mode control (16-bit)
+#define RT_MII_BMSR  0x64    // PHY basic-mode status  (16-bit, RO)
+#define RT_CONFIG5   0xD8
 #define RT_CMD_RESET 0x10
 #define RT_CMD_RX_ENABLE 0x08
 #define RT_CMD_TX_ENABLE 0x04
 #define RT_CMD_RX_BUF_EMPTY 0x01
 #define RT_TX_HOST_OWNS 0x00002000
+#define RT_CFG_UNLOCK    0xC0   // CFG9346: enable CONFIG0-5 writes
+#define RT_CONFIG1_LWACT 0x10
+#define RT_CONFIG1_LED0  0x40
+#define RT_CONFIG1_DVRLOAD 0x20
+#define RT_CONFIG1_LED1  0x80
+#define RT_CONFIG4_RXFIFOAC 0x80   // auto-clear RX FIFO overflow
+#define RT_CONFIG5_LDPS  0x04      // disable link-down power-save (keeps PHY alive)
+#define RT_MII_RESET     0x8000
+#define RT_MII_AN_ENABLE 0x1000
+#define RT_MII_AN_START  0x0200
+#define RT_MII_LINK      0x0004
 #define RXC_RBLEN_16K (1 << 11)
 #define RXC_MXDMA_1K (6 << 8)
 #define RXC_WRAP 0x80
@@ -82,9 +177,25 @@ static int gaps_init(void)
     if (g2_read_8(GAPS_BASE + 0x1650) & 0x1)
         g2_write_16(GAPS_BASE + 0x1654, (g2_read_16(GAPS_BASE + 0x1654) & 0xfffc) | 0x8000);
     g2_write_32(GAPS_BASE + 0x1414, 0x00000001);
+    // GAPS 0x141c "SEGA" magic handshake (KOS): write the 3-step sequence and restore
+    // 'SEGA'. The final write makes GAPS pull RSTB low ~120ns, which autoloads the
+    // RTL8139 registers from its EEPROM - notably the MAC. Without this, IDR0 reads
+    // can come back zero on real silicon (Flycast pre-populates them, hiding it).
+    if (g2_read_32(GAPS_BASE + 0x141c) == 0x41474553) {           // 'SEGA' LE
+        g2_write_32(GAPS_BASE + 0x141c, 0x55aaff00);
+        if (g2_read_32(GAPS_BASE + 0x141c) == 0x55aaff00) {
+            g2_write_32(GAPS_BASE + 0x141c, 0xaa5500ff);
+            if (g2_read_32(GAPS_BASE + 0x141c) == 0xaa5500ff)
+                g2_write_32(GAPS_BASE + 0x141c, 0x41474553);      // restore -> RSTB/EEPROM autoload
+        }
+    }
     return 0;
 }
-static void rtl_reset(void) { int i; g2_write_8(NIC(RT_CHIPCMD), RT_CMD_RESET); for (i = 1000; i > 0 && (g2_read_8(NIC(RT_CHIPCMD)) & RT_CMD_RESET); i--) ; }
+// Reset must complete before we touch any other register. KOS polls reset-done on a real
+// wall-clock timeout (yielding); the old iteration-count spin completes "instantly" in the
+// emulator but on a cold chip can run out before reset finishes -> we'd then program a chip
+// mid-reset (writes silently lost / wedge). Yield 1ms per poll, up to ~100ms.
+static void rtl_reset(void) { int i; g2_write_8(NIC(RT_CHIPCMD), RT_CMD_RESET); for (i = 0; i < 100 && (g2_read_8(NIC(RT_CHIPCMD)) & RT_CMD_RESET); i++) Sleep(1); }
 static void rtl_read_mac(void)
 {
     DWORD lo = g2_read_32(NIC(RT_IDR0)), hi = g2_read_32(NIC(RT_IDR0 + 4));
@@ -94,25 +205,59 @@ static void rtl_read_mac(void)
 static void rtl_start(void)
 {
     int i;
+    // RX buffer + 4 TX descriptor base addresses (chip-side DMA addresses).
     g2_write_32(NIC(RT_RXBUF), RTL_DMA);
     for (i = 0; i < TX_N; i++) g2_write_32(NIC(RT_TXADDR0 + i * 4), RTL_DMA + i * TX_LEN + TX_OFF);
-    g2_write_16(NIC(RT_INTRMASK), 0);
+
+    g2_write_16(NIC(RT_INTRMASK), 0);          // we POLL; never enable the RTL/G2 IRQ path
     g2_write_8 (NIC(RT_CHIPCMD), RT_CMD_RX_ENABLE | RT_CMD_TX_ENABLE);
-    g2_write_32(NIC(RT_RXCONFIG), RX_CONFIG | RXC_APM | RXC_AB);
+    g2_write_32(NIC(RT_RXCONFIG), RX_CONFIG);
     g2_write_32(NIC(RT_TXCONFIG), TX_CONFIG);
-    g2_write_8 (NIC(RT_CHIPCMD), RT_CMD_RX_ENABLE | RT_CMD_TX_ENABLE);
-    g2_write_32(NIC(RT_MAR0), 0xffffffff);
+
+    // Bring-up the stock driver / Flycast skip but real silicon needs. Unlock the config
+    // regs (CFG9346=0xC0), then: CONFIG1 DVRLOAD; CONFIG4 RX-FIFO auto-clear (so an RX
+    // overrun self-recovers instead of wedging); CONFIG5 LDPS = disable link-down power
+    // save (keep the PHY powered so it can negotiate). Relock after.
+    g2_write_8(NIC(RT_CFG9346), RT_CFG_UNLOCK);
+    g2_write_8(NIC(RT_CONFIG1), (BYTE)((g2_read_8(NIC(RT_CONFIG1)) & ~(RT_CONFIG1_LWACT | RT_CONFIG1_LED0)) | RT_CONFIG1_DVRLOAD | RT_CONFIG1_LED1));
+    g2_write_8(NIC(RT_CONFIG4), (BYTE)(g2_read_8(NIC(RT_CONFIG4)) | RT_CONFIG4_RXFIFOAC));
+    g2_write_8(NIC(RT_CONFIG5), (BYTE)(g2_read_8(NIC(RT_CONFIG5)) | RT_CONFIG5_LDPS));
+    g2_write_8(NIC(RT_CFG9346), 0);
+
+    g2_write_32(NIC(RT_MAR0), 0xffffffff);     // accept all multicast (broadcast via RXC_AB)
     g2_write_32(NIC(RT_MAR4), 0xffffffff);
-    g2_write_16(NIC(RT_INTRSTATUS), 0xffff);
+    g2_write_16(NIC(RT_MULTIINTR), 0);
+    g2_write_16(NIC(RT_INTRSTATUS), 0xffff);   // ack pending
+    g2_write_32(NIC(RT_RXMISSED), 0);          // clear missed-packet counter
+    g2_write_8 (NIC(RT_CHIPCMD), RT_CMD_RX_ENABLE | RT_CMD_TX_ENABLE);
+
+    // KICK AUTO-NEGOTIATION - the real-HW fix. On a live cable the PHY must negotiate
+    // before there's carrier; without it no frames flow -> no DHCP -> no DNS. Flycast
+    // fakes instant link, hiding this. We do NOT block boot waiting for link: the netif
+    // DHCP worker retries every 1.5s, so the lease lands once link is up (~2-3s).
+    g2_write_16(NIC(RT_MII_BMCR), RT_MII_RESET | RT_MII_AN_ENABLE | RT_MII_AN_START);
+
+    g2_write_32(NIC(RT_RXCONFIG), g2_read_32(NIC(RT_RXCONFIG)) | RXC_APM | RXC_AB);
     g_curtx = 0; g_currx = 0;
-    g2_write_16(NIC(RT_RXBUFTAIL), (WORD)(0 - 16));
+    g2_write_16(NIC(RT_RXBUFTAIL), (WORD)((0 - 16) & (RX_BUF_LEN - 1)));   // CAPR inside the ring
+}
+
+// PHY link state (BMSR link bit). Exposed so the shim/app can show link-up before DHCP.
+int BbaLinkUp(void)
+{
+    DWORD prev = SetKMode(TRUE);
+    int up = 0;
+    __try { up = (g2_read_16(NIC(RT_MII_BMSR)) & RT_MII_LINK) ? 1 : 0; }
+    __except (EXCEPTION_EXECUTE_HANDLER) { up = 0; }
+    SetKMode(prev);
+    return up;
 }
 static BOOL tx(const BYTE *pkt, int len)
 {
     DWORD tsd = NIC(RT_TXSTATUS0 + 4 * g_curtx), buf = RTL_CPU + g_curtx * TX_LEN + TX_OFF;
     int i;
     if (len <= 0 || len > 1514) return FALSE;
-    g2_write_block(buf, pkt, len);
+    g2_write_block32(buf, pkt, len);               // 32-bit PIO to the TX DMA window (G2 width rule)
     if (len < 60) { for (i = len; i < 60; i++) g2_write_8(buf + i, 0); len = 60; }
     g2_write_32(tsd, (DWORD)len);
     g_curtx = (g_curtx + 1) & (TX_N - 1);
@@ -129,7 +274,7 @@ static int rx(BYTE *buf, int maxlen)
     pkt = size - 4;
     if (!(status & 1) || pkt < 14 || pkt > 1514) { rtl_reset(); rtl_start(); return -1; }
     if (pkt > maxlen) pkt = maxlen;
-    g2_read_block(buf, RTL_CPU + off + 4, pkt);
+    g2_read_block32(buf, RTL_CPU + off + 4, pkt);  // 32-bit PIO from the RX DMA window (G2 width rule)
     g_currx = (g_currx + size + 4 + 3) & ~3;
     g2_write_16(NIC(RT_RXBUFTAIL), (WORD)((g_currx - 16) & (RX_BUF_LEN - 1)));
     return pkt;

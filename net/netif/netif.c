@@ -210,13 +210,40 @@ static int OurIoctl(ifnet *ifn, ulong cmd, void *arg) { (void)ifn; (void)cmd; (v
 // value "DnsServers", REG_BINARY = [count][ip...] (network order) - exactly the layout
 // mppp's IPCP RegAddData uses. Without this gethostbyname has no resolver (microstk has
 // no DNS code of its own).
+extern int FlashromGetDns(unsigned long dns[2]);   // DC system-flash ISP DNS (flashrom.c)
+
+// Pack a dotted IP into the network-order-as-LE rep g_offDns uses (wire bytes in memory).
+static ulong dns_ip(BYTE a, BYTE b, BYTE c, BYTE d)
+{ return (ulong)a | ((ulong)b << 8) | ((ulong)c << 16) | ((ulong)d << 24); }
+
+// DNS resolution order, matching the KOS path: DHCP option-6 -> DC system-flash ISP
+// config -> public resolver last resort (KOS hardcodes 8.8.4.4). This guarantees
+// gethostbyname always has a server, so name resolution never silently dies when the
+// network routes but advertised no DNS server.
 static void WriteDnsServers(void)
 {
     HKEY  h;
     ulong buf[6];
     int   i;
     LONG  rc1, rc2 = -1;
-    if (g_offDnsN <= 0) { OutputDebugStringW(L"netif: DNS: lease had no option-6 servers\r\n"); return; }
+    if (g_offDnsN <= 0)
+    {
+        unsigned long fdns[2] = { 0, 0 };
+        int fn = FlashromGetDns(fdns);                 // 2nd: DC system flash (DreamPassport/PlanetWeb)
+        if (fn > 0)
+        {
+            for (i = 0; i < fn; i++) g_offDns[i] = fdns[i];
+            g_offDnsN = fn;
+            OutputDebugStringW(L"netif: DNS: using flashrom (ISP) DNS servers\r\n");
+        }
+        else                                           // 3rd: public resolver (as KOS does)
+        {
+            g_offDns[0] = dns_ip(8, 8, 4, 4);          // Google public DNS
+            g_offDns[1] = dns_ip(8, 8, 8, 8);
+            g_offDnsN   = 2;
+            OutputDebugStringW(L"netif: DNS: no option-6/flashrom - using public 8.8.4.4/8.8.8.8\r\n");
+        }
+    }
     buf[0] = (ulong)g_offDnsN;
     for (i = 0; i < g_offDnsN && i < 5; i++) buf[1 + i] = g_offDns[i];   // network order, as received
     h = 0;
@@ -248,6 +275,11 @@ static int NetifOnLease(ulong ip, ulong mask, ulong gw)
     g_ifn->ifn_dwFlags |= IFF_UP;
     WriteDnsServers();
     g_haveIP = 1;
+    // Eagerly resolve the GATEWAY MAC now. Off-link TCP routes via g_gw; if its ARP isn't
+    // cached when the first off-link SYN goes out, OurTransmit drops that SYN and waits for a
+    // TCP retransmit (~3s) - which can exceed a connect() timeout and look like "off-link
+    // fails". Pre-warming the gateway entry means the first off-link SYN is sent immediately.
+    if (g_gw && g_gw != g_myIP) ArpRequest(g_gw);
     { WCHAR b[96]; ulong dns = g_offDnsN ? g_offDns[0] : 0;
       wsprintfW(b, L"netif: bound IP=%u.%u.%u.%u gw=%u.%u.%u.%u dns=%u.%u.%u.%u\r\n",
         ip&0xff,(ip>>8)&0xff,(ip>>16)&0xff,(ip>>24)&0xff,
@@ -353,6 +385,8 @@ static DWORD WINAPI NetWorker(LPVOID p)
 // inert/DOWN so microstk routes through the one that gets an IP.
 static int g_hwUp;
 
+extern void FbLog(unsigned long rgb);            // on-screen POST trail (fblog.c)
+
 int InterfaceInitialize(unsigned short *name, ifnet **ppIf)
 {
     ifnet *ifn;
@@ -360,15 +394,38 @@ int InterfaceInitialize(unsigned short *name, ifnet **ppIf)
 
     if (!g_hwUp)                                 // first call: detect + bring up hardware
     {
+        FbLog(0x303030);                         // gray: shim reached InterfaceInitialize
         s_link = 0;
+        FbLog(0x800000);                         // red: probing W5500 (SCI/SCIF SpiInit + VERSIONR)
         if (s_w5500.probe())      s_link = &s_w5500;   // 1st: dedicated W5500 NIC if present
-        else if (s_bba.probe())   s_link = &s_bba;     // 2nd: Broadband Adapter (RTL8139)
-        else if (s_modem.probe()) s_link = &s_modem;   // 3rd: dial-up modem (PPP)
-        else { s_link = &s_null; OutputDebugStringW(L"netif: no link adapter - stack up on loopback only\r\n"); }
-        if (!s_link->init(g_mac))     { OutputDebugStringW(L"netif: link init failed\r\n"); return 0; }
+        else
+        {
+            FbLog(0x808000);                     // olive: W5500 absent, probing BBA (GAPS)
+            if (s_bba.probe())        s_link = &s_bba;     // 2nd: Broadband Adapter (RTL8139)
+            else if (s_modem.probe()) s_link = &s_modem;   // 3rd: dial-up modem (PPP)
+            else { s_link = &s_null; OutputDebugStringW(L"netif: no link adapter - stack up on loopback only\r\n"); }
+        }
+        FbLog(0x0000A0);                          // blue: link chosen, bringing hardware up (init)
+        // Backend probed PRESENT but bring-up failed. This is the real-HW killer: on silicon
+        // BbaInit/W5500Init can fail in ways Flycast never does (GAPS EEPROM handshake, reset
+        // timing, no PHY/link). We must NOT return 0 here - microstk then wedges on a NULL
+        // ifnet and the whole boot hangs/resets before the shell (same wedge the s_null probe
+        // fallback below avoids). So on init failure, fall back to the no-op null link: the
+        // system still boots to the desktop (network down) and the failure is logged, instead
+        // of bricking the boot. This makes "BBA-only" and "W5500-only" boot-survivable.
+        if (!s_link->init(g_mac))
+        {
+            FbLog(0xFF00FF);                     // magenta: init FAILED -> null fallback
+            { WCHAR b[80]; wsprintfW(b, L"netif: %S init FAILED -> null link (network down, boot continues)\r\n",
+                s_link->name); OutputDebugStringW(b); }
+            s_link = &s_null;
+            s_link->init(g_mac);                 // NullInit cannot fail
+        }
+        else FbLog(0x00A000);                    // green: link init OK
         { WCHAR b[64]; wsprintfW(b, L"netif: link=%S MAC=%02x:%02x:%02x:%02x:%02x:%02x\r\n",
             s_link->name, g_mac[0],g_mac[1],g_mac[2],g_mac[3],g_mac[4],g_mac[5]); OutputDebugStringW(b); }
         g_hwUp = 1;
+        FbLog(0x00FFFF);                         // cyan: hardware up, starting worker
     }
 
     ifn = (ifnet *)LocalAlloc(LPTR, sizeof(ifnet));

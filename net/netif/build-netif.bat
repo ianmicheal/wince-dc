@@ -24,6 +24,13 @@ echo [netif] building dcspi transport ...
 call "%REPO%\drivers\dcspi\build-dcspi.bat" %DCBT%
 if not exist "%REPO%\reference\driver-obj\dcspi.dll" (echo [netif] dcspi.dll MISSING - build failed & exit /b 1)
 
+rem  Assemble the G2-bus interrupt lock (SH-4 SR.IMASK mask/restore; no inline asm in
+rem  the MS SH compiler). Needs kxshx.h (LEAF_ENTRY/ENTRY_END) on the asm include path.
+echo [netif] assembling g2lock.src (SH-4) ...
+set ASMINC=%REPO%\vendor\sh-toolchain\ce3-ppc2k\include
+shasm.exe -cpu=SH4 -DSH4=1 -DSHx=1 -nologo -I"%ASMINC%" -object="%OUT%\g2lock.obj" "%~dp0g2lock.src"
+if not exist "%OUT%\g2lock.obj" (echo [netif] ASSEMBLE FAILED g2lock & exit /b 1)
+
 set CF=/nologo /c /W3 -DUNDER_CE=212 -D_WIN32_WCE=212 -DUNICODE -D_UNICODE -DSH4=1 -DSHx=1
 echo [netif] compiling netif.c + bba_hw.c + ras.c + w5500.c (SH-4) ...
 "%SHBIN%\cl.exe" %CF% /Fo"%OUT%\netif.obj"  "%~dp0netif.c"
@@ -34,11 +41,15 @@ if errorlevel 1 (echo [netif] COMPILE FAILED bba_hw & exit /b 1)
 if errorlevel 1 (echo [netif] COMPILE FAILED ras & exit /b 1)
 "%SHBIN%\cl.exe" %CF% /Fo"%OUT%\w5500.obj"  "%~dp0w5500.c"
 if errorlevel 1 (echo [netif] COMPILE FAILED w5500 & exit /b 1)
+"%SHBIN%\cl.exe" %CF% /Fo"%OUT%\flashrom.obj" "%~dp0flashrom.c"
+if errorlevel 1 (echo [netif] COMPILE FAILED flashrom & exit /b 1)
+"%SHBIN%\cl.exe" %CF% /Fo"%OUT%\fblog.obj" "%~dp0fblog.c"
+if errorlevel 1 (echo [netif] COMPILE FAILED fblog & exit /b 1)
 
 echo [netif] linking mppp.dll ...
 "%HOSTBIN%\link.exe" /nologo /dll /machine:SH4 /subsystem:windowsce,2.12 /entry:dllentry ^
   /def:"%~dp0netif.def" /out:"%OUT%\mppp.dll" ^
-  "%OUT%\netif.obj" "%OUT%\bba_hw.obj" "%OUT%\ras.obj" "%OUT%\w5500.obj" ^
+  "%OUT%\netif.obj" "%OUT%\bba_hw.obj" "%OUT%\ras.obj" "%OUT%\w5500.obj" "%OUT%\flashrom.obj" "%OUT%\fblog.obj" "%OUT%\g2lock.obj" ^
   "%DCSDK%\lib\%DCBT%\coredll.lib" "%DCSDK%\lib\%DCBT%\corelibc.lib" > "%OUT%\netif.link.log" 2>&1
 type "%OUT%\netif.link.log"
 echo [netif] errorlevel=%errorlevel%  (out: %OUT%\mppp.dll)

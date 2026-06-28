@@ -31,20 +31,32 @@ static int   g_btnLast = 0, g_mbtnLast = 0, g_click = 0, g_activate = 0;
 static DWORD g_lastTick = 0;
 static long  g_accX = 0, g_accY = 0;   // sub-pixel motion accumulators (axis*ms)
 
-// DC controller buttons live in the LOW 16 bits of the DInput button mask
-// (observed on Flycast): D-pad U/D/L/R = bits 3/4/5/6, face A = bit 1. The HIGH
-// bits (>=16) carry unstable analog trigger/stick data the driver leaks in (idle
-// has e.g. 0x03110000) - they are NOT buttons, so mask them off.
-#define DPAD_BITS  0x00000078u         // bits 3..6 (U,D,L,R)
-#define FACE_BITS  0x0000FF87u         // low-16 digital buttons minus the D-pad bits
-static const struct { DWORD bit; DWORD vk; } s_dpad[4] =
-{
-    { 0x00000008u, VK_UP }, { 0x00000010u, VK_DOWN },
-    { 0x00000020u, VK_LEFT }, { 0x00000040u, VK_RIGHT },
-};
+// DC controller buttons are identified by Maple HID USAGE (inc\maplusag.h), NOT by a fixed
+// rgbButtons[] bit position - the array index depends on enumeration order and varies. So we
+// build a usage->index map at acquire time via EnumObjects, exactly like the SDK
+// samples\dinput\Controller. (The old hardcoded FACE_BITS/DPAD_BITS were Flycast-order
+// guesses, which is why A never worked on a real pad.)  usage = 0xFF00 + index:
+#define USG_FIRST   0xFF00
+#define USG_A       0
+#define USG_B       1
+#define USG_START   3
+#define USG_LA      4              // D-pad left
+#define USG_RA      5              // D-pad right
+#define USG_DA      6              // D-pad down
+#define USG_UA      7              // D-pad up
+#define USG_X       8
+#define USG_Y       9
+#define USG_N       24
+static signed char g_btnIdx[USG_N];                 // Maple usage index -> rgbButtons[] index (-1 absent)
+static int         g_btnEnum;                        // running button count while enumerating
+static const DWORD s_dpadVk[4] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT };  // matches dn[] order below
+// 1 if the button with Maple usage 'u' is pressed in joystate 'js'.
+#define JBTN(js, u) ((g_btnIdx[u] >= 0 && ((js).rgbButtons[g_btnIdx[u]] & 0x80)) ? 1 : 0)
 static int   g_dpadHeld[4];
 static DWORD g_dpadRepeatAt[4];
-static int   g_joyPrimed = 0, g_mousePrimed = 0;   // skip edge events on first read
+static int   g_mousePrimed = 0;                    // skip edge events on first read
+static DWORD g_joyPrimeUntil = 0;                  // joy: track baseline (no edges) until this tick
+#define JOY_PRIME_MS 400                           // startup settle window for the controller
 
 #define STICK_DZ   150     // analog deadzone (range is +-1000)
 #define STICK_DIV  1250    // px = axis * dt_ms / DIV; full deflection ~= 800 px/sec
@@ -64,6 +76,20 @@ static const struct { int dik; DWORD vk; int nav; } g_map[] =
     { DIK_C, 'C', 0 },
 };
 #define NMAP (sizeof(g_map) / sizeof(g_map[0]))
+
+// EnumObjects callback: record each button's rgbButtons[] index (its ordinal among buttons)
+// keyed by Maple HID usage, so we can read A/B/X/Y/Start/D-pad regardless of pad layout.
+static BOOL CALLBACK JoyObjCb(LPCDIDEVICEOBJECTINSTANCE o, LPVOID ctx)
+{
+    (void)ctx;
+    if (LOBYTE(LOWORD(o->dwType)) & DIDFT_BUTTON)
+    {
+        int u = (int)o->wUsage - USG_FIRST;
+        if (u >= 0 && u < USG_N) g_btnIdx[u] = (signed char)g_btnEnum;
+        g_btnEnum++;
+    }
+    return DIENUM_CONTINUE;
+}
 
 static BOOL CALLBACK EnumCb(LPCDIDEVICEINSTANCE di, LPVOID ctx)
 {
@@ -104,6 +130,12 @@ static BOOL CALLBACK EnumCb(LPCDIDEVICEINSTANCE di, LPVOID ctx)
     else if (t == DIDEVTYPE_JOYSTICK && !g_joy)
     {
         DIPROPRANGE r;
+        int i;
+        // Build the Maple usage -> rgbButtons[] index map BEFORE SetDataFormat (SDK order):
+        // EnumObjects visits each button; its ordinal among buttons is its rgbButtons[] index.
+        for (i = 0; i < USG_N; i++) g_btnIdx[i] = -1;
+        g_btnEnum = 0;
+        IDirectInputDevice2_EnumObjects(d2, JoyObjCb, NULL, DIDFT_BUTTON);
         IDirectInputDevice2_SetDataFormat(d2, &c_dfDIJoystick);
         memset(&r, 0, sizeof(r));
         r.diph.dwSize       = sizeof(DIPROPRANGE);
@@ -113,7 +145,9 @@ static BOOL CALLBACK EnumCb(LPCDIDEVICEINSTANCE di, LPVOID ctx)
         IDirectInputDevice2_SetProperty(d2, DIPROP_RANGE, &r.diph);
         IDirectInputDevice2_Acquire(d2);
         g_joy = d2;
-        OutputDebugStringW(L"DCIN: joystick acquired\r\n");
+        { WCHAR b[96]; wsprintfW(b, L"DCIN: joystick acquired, %d buttons (A@%d B@%d X@%d Start@%d)\r\n",
+            g_btnEnum, g_btnIdx[USG_A], g_btnIdx[USG_B], g_btnIdx[USG_X], g_btnIdx[USG_START]);
+          OutputDebugStringW(b); }
     }
     else
     {
@@ -131,6 +165,7 @@ BOOL DInInit(HWND hwnd)
         return FALSE;
     }
     IDirectInput_EnumDevices(g_di, 0, EnumCb, NULL, DIEDFL_ATTACHEDONLY);
+    g_joyPrimeUntil = GetTickCount() + JOY_PRIME_MS;   // settle the controller before edge-detecting
     return (g_kbd != NULL);
 }
 
@@ -162,7 +197,7 @@ void DInReacquire(void)
     if (g_joy)   IDirectInputDevice2_Acquire(g_joy);
     memset(g_now, 0, sizeof(g_now));
     memset(g_last, 0, sizeof(g_last));
-    g_joyPrimed = 0; g_mousePrimed = 0;
+    g_joyPrimeUntil = GetTickCount() + JOY_PRIME_MS; g_mousePrimed = 0;
     g_qh = g_qt = 0;                 // drop any queued keys from before the hand-off
     OutputDebugStringW(L"DCIN: reacquired input\r\n");
 }
@@ -222,8 +257,7 @@ void DInUpdate(void)
             DWORD dt = g_lastTick ? (nowt - g_lastTick) : 16;
             int   ax = js.lX < 0 ? -js.lX : js.lX;
             int   ay = js.lY < 0 ? -js.lY : js.lY;
-            DWORD mask = 0, face;
-            int   i, dx, dy;
+            int   i, dx, dy, face, dn[4];
             if (dt > 100) dt = 100;     // clamp after a stall so the cursor doesn't leap
             // analog stick -> cursor: time-based + sub-pixel accumulator (speed is
             // frame-rate independent AND small deflections still move)
@@ -234,31 +268,30 @@ void DInUpdate(void)
             if (g_cx < 0) g_cx = 0;  if (g_cx >= SCRW) g_cx = SCRW - 1;
             if (g_cy < 0) g_cy = 0;  if (g_cy >= SCRH) g_cy = SCRH - 1;
 
-            for (i = 0; i < 32; i++) if (js.rgbButtons[i] & 0x80) mask |= (1u << i);
-            face = mask & FACE_BITS;    // low-16 digital face buttons only (no analog noise)
-            if (!g_joyPrimed)
+            // Buttons by Maple usage (the proper, layout-independent way). D-pad U/D/L/R,
+            // and "activate" = A or Start.
+            dn[0] = JBTN(js, USG_UA); dn[1] = JBTN(js, USG_DA);
+            dn[2] = JBTN(js, USG_LA); dn[3] = JBTN(js, USG_RA);
+            face  = (JBTN(js, USG_A) || JBTN(js, USG_START)) ? 1 : 0;
+            if (nowt < g_joyPrimeUntil)
             {
-                // first sample: record baseline only, generate NO edges - otherwise a
-                // button/axis transient at boot fires a phantom "activate" (which was
-                // auto-launching the selected desktop icon).
-                g_joyPrimed = 1;
-                for (i = 0; i < 4; i++) g_dpadHeld[i] = (mask & s_dpad[i].bit) ? 1 : 0;
-                g_btnLast = face ? 1 : 0;
+                // STARTUP SETTLE WINDOW: just track the baseline, generate NO edges (lets the
+                // device's transient first reads settle so they can't fire a phantom activate).
+                for (i = 0; i < 4; i++) g_dpadHeld[i] = dn[i];
+                g_btnLast = face;
             }
             else
             {
-                // D-pad (button bits) -> arrow keys, per-direction edge + auto-repeat
+                // D-pad -> arrow keys, per-direction edge + auto-repeat
                 for (i = 0; i < 4; i++)
                 {
-                    int dn = (mask & s_dpad[i].bit) ? 1 : 0;
-                    if (dn && !g_dpadHeld[i])                  { Push(s_dpad[i].vk); g_dpadRepeatAt[i] = nowt + 350; }
-                    else if (dn && nowt >= g_dpadRepeatAt[i])  { Push(s_dpad[i].vk); g_dpadRepeatAt[i] = nowt + 120; }
-                    g_dpadHeld[i] = dn;
+                    if (dn[i] && !g_dpadHeld[i])               { Push(s_dpadVk[i]); g_dpadRepeatAt[i] = nowt + 350; }
+                    else if (dn[i] && nowt >= g_dpadRepeatAt[i]) { Push(s_dpadVk[i]); g_dpadRepeatAt[i] = nowt + 120; }
+                    g_dpadHeld[i] = dn[i];
                 }
-                // face buttons (not D-pad / idle bit) -> "activate" (Enter): the
-                // controller selection paradigm (D-pad selects, A opens selection).
+                // A / Start -> "activate" (D-pad selects, A opens the selection)
                 if (face && !g_btnLast) g_activate = 1;
-                g_btnLast = face ? 1 : 0;
+                g_btnLast = face;
             }
         }
     }

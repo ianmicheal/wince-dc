@@ -13,8 +13,10 @@ Thumbs.db
 #       clones-and-builds offline. Only C:\wcedreamcast (the DC SDK) is external
 #       and fetched separately — see RESUME.md / toolchain\bootstrap.ps1.
 reference/disc/
+reference/disc-real/
 reference/*.iso
 reference/*.cdi
+reference/*.log
 reference/disc-gdi/
 utils/ip.bin
 

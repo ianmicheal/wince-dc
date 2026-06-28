@@ -22,7 +22,13 @@
 #define GLAST     126
 #define GN        (GLAST - GFIRST + 1)
 #define GH        16               // glyph cell height
-#define MAX_QUADS 2048
+// Retained-quad buffer sizes. D3DTLVERTEX is 32 bytes, so each *_vb is QUADS*4*32 bytes -
+// at the old 2048 that was 256KB EACH (512KB+ of BSS) for a UI that uses a fraction of it.
+// The live scene (s_vb) holds the desktop replay (~150) + open-window quads; the desktop
+// cache (s_dvb) holds ONLY the desktop. Right-sized; PushQuad/EndDesktopCache clamp, so an
+// over-busy frame just drops trailing quads rather than overflowing. Reclaims ~370KB RAM.
+#define MAX_QUADS  1024              // live scene (desktop + windows)
+#define DESK_QUADS 384               // desktop cache only (icons + labels + taskbar)
 
 static HWND                s_hwnd    = NULL;
 static LPDIRECTDRAW        s_dd      = NULL;
@@ -45,9 +51,9 @@ static BYTE        s_qtex[MAX_QUADS];            // 0 = solid fill, 1 = atlas
 static int         s_nQuad = 0;
 
 // Desktop cache: a cached vertex SUB-LIST (not pixels) prepended each frame.
-static D3DTLVERTEX s_dvb[MAX_QUADS * 4];
-static WORD        s_dib[MAX_QUADS * 6];
-static BYTE        s_dtex[MAX_QUADS];
+static D3DTLVERTEX s_dvb[DESK_QUADS * 4];
+static WORD        s_dib[DESK_QUADS * 6];
+static BYTE        s_dtex[DESK_QUADS];
 static int         s_dQuad = 0;
 static BOOL        s_recDesk = FALSE;
 
@@ -521,9 +527,10 @@ void GfxBeginDesktopCache(void)
 void GfxEndDesktopCache(void)
 {
     s_dQuad = s_nQuad;
-    memcpy(s_dvb, s_vb, s_nQuad * 4 * sizeof(D3DTLVERTEX));
-    memcpy(s_dib, s_ib, s_nQuad * 6 * sizeof(WORD));
-    memcpy(s_dtex, s_qtex, s_nQuad);
+    if (s_dQuad > DESK_QUADS) s_dQuad = DESK_QUADS;   // cache holds the desktop only; never overflow it
+    memcpy(s_dvb, s_vb, s_dQuad * 4 * sizeof(D3DTLVERTEX));
+    memcpy(s_dib, s_ib, s_dQuad * 6 * sizeof(WORD));
+    memcpy(s_dtex, s_qtex, s_dQuad);
     s_recDesk = FALSE;
     s_nQuad = 0;
 }
