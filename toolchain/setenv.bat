@@ -8,11 +8,11 @@ if "%~1"=="" (set BLDTYPE=retail) else (set BLDTYPE=%~1)
 
 rem ---- repo-relative paths (portable: clone the repo anywhere) -----------------
 for %%I in ("%~dp0..") do set REPO=%%~fI
-set WINCESRC=%REPO%\vendor\wince-src
 set GWESLAB=%REPO%\vendor\sh-toolchain
-rem ---- DC SDK is NOT in the repo (download separately; see RESUME.md). ---------
-rem      Override the location by setting WCEDREAMCASTROOT before calling this.
-if "%WCEDREAMCASTROOT%"=="" set WCEDREAMCASTROOT=C:\wcedreamcast
+rem ---- DC SDK is now VENDORED at vendor\wcesdk (inc/lib/tools/image). Override with
+rem      WCEDREAMCASTROOT only if you want to build against an external SDK install.
+rem      (image work-dir seeding from vendor\wcesdk\image is wired by the CMake build.)
+if "%WCEDREAMCASTROOT%"=="" set WCEDREAMCASTROOT=%REPO%\vendor\wcesdk
 set DCSDK=%WCEDREAMCASTROOT%
 
 rem ---- DC SDK image-build env (faithful replica of wce.bat retail|debug) ------
