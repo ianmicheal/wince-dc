@@ -39,14 +39,12 @@ Platform Builder, no SDK install, no CD key.
 - **Built-in apps** — Explorer (browse `\`, `\Windows`, `\CD-ROM`; launch binaries), Task
   Manager (live process + RAM view), Clock, Calculator, a memory tester, and a winsock network
   tester.
-- **Real networking over the stock CE stack** — a universal link shim (`mppp.dll`) lets the
-  stock `microstk.exe` + `winsock.dll` run over **Ethernet** instead of dial-up PPP. The
-  Broadband Adapter path is verified end-to-end: **DHCP → DNS → TCP → HTTP**. DNS resolves via
-  DHCP option-6 → the Dreamcast's own flash ISP config → a public resolver. A **W5500/MACRAW
-  over SPI** backend is in progress.
-- **Runs retail CE games online** — e.g. *4x4 Evolution* dials out and reaches its master
-  server on real hardware, over the Broadband Adapter, with no game patches.
-- **SDK-correct input** — DC controller via Maple/DirectInput, plus mouse support for the shell.
+- **Networking over the stock CE stack** *(work in progress)* — a universal link shim
+  (`mppp.dll`) aims to let the stock `microstk.exe` + `winsock.dll` run over **Ethernet**
+  instead of dial-up PPP, with DHCP/ARP/DNS handled in the shim (DHCP option-6 → the
+  Dreamcast's own flash ISP config → a public resolver). Both link backends — the **Broadband
+  Adapter** and a **W5500/MACRAW over SPI** transport — are still being brought up and not yet
+  working end-to-end.
 - **Self-contained CMake build** — vendored SH-4 `cl.exe` + the CE image tools (`makeimg`,
   `romimage`, …). Produces **retail** (silent) or **debug** (serial console) images, and a
   standard bootable GDI.
