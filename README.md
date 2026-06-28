@@ -16,9 +16,8 @@
 
 The Dreamcast shipped a stripped-down Windows CE 2.12 that retail games booted into and never
 exposed. **Windows CE Dreamcast Community Edition** takes that same on-disc CE runtime and turns
-it into something you can actually *use*: a multitasking windowed desktop, a real TCP/IP stack
-over the Broadband Adapter, DirectInput controller + mouse, and the ability to run real retail
-CE games online — all baked into a standard bootable Dreamcast disc.
+it into something you can actually *use*: a multitasking windowed desktop and an in-progress
+TCP/IP stack over the Broadband Adapter — all baked into a standard bootable Dreamcast disc.
 
 It is **fully self-contained**: the SH-4 PE compiler and the entire CE image toolchain are
 vendored in this repo. One `cmake` invocation goes from source to a bootable `disc.gdi`. No
