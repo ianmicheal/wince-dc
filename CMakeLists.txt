@@ -279,3 +279,17 @@ add_dependencies(gdi dcwplay)
 if(HTML)
   add_dependencies(gdi iexplore)
 endif()
+
+# Same pipeline as `gdi` but with a FULL, contiguously-padded data track (-Full -> ~1.1 GB, no
+# sparse gap). Slower/larger; use for GDEMU / loaders that dislike the gapped multi-track layout.
+add_custom_target(gdi-full
+  ${GDI_STAGE}
+  COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File ${REPO}/toolchain/make-gdi.ps1
+          -Image ${WINCEOS} -OutDir ${DISCDIR} -ExtraData ${CDROM} -Full
+  DEPENDS ${WINCEOS}
+  COMMENT "make-gdi (FULL, no truncate): 0winceos.bin (+ disc apps) -> disc.gdi"
+  USES_TERMINAL)
+add_dependencies(gdi-full dcwplay)
+if(HTML)
+  add_dependencies(gdi-full iexplore)
+endif()

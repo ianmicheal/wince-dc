@@ -13,7 +13,8 @@ param(
   [string]$Image     = "$PSScriptRoot\..\reference\0winceos.ours.bin",
   [string]$OutDir    = "$PSScriptRoot\..\reference\disc",
   [string]$Utils     = "$PSScriptRoot\..\utils",
-  [string]$ExtraData = ""    # optional folder whose contents go into \CD-ROM
+  [string]$ExtraData = "",   # optional folder whose contents go into \CD-ROM
+  [switch]$Full              # default = sparse/gapped track (fast, ~MBs); -Full = full padded data track
 )
 $ErrorActionPreference = "Stop"
 $sec = 2352
@@ -41,7 +42,12 @@ Copy-Item "$Utils\Half-Life.GDI" $gdi -Force
 # LBA (a separate track04), skipping the empty gap between -> a ~5 MB disc (no
 # extra data) instead of 1.1 GB of mostly-zero padding. The Dreamcast loads the
 # resulting multi-track GDI fine; the file data still ends at the disc's end LBA.
-& "$Utils\buildgdi.exe" -data $data -ip "$Utils\ip.bin" -output $OutDir -gdi $gdi -V WINCE -truncate | Out-Null
+# Pass -Full for a FULL, contiguously-padded data track (large, ~1.1 GB; some loaders/GDEMU
+# prefer the non-gapped layout). Default (no -Full) emits the sparse/truncated track.
+$bgArgs = @('-data', $data, '-ip', "$Utils\ip.bin", '-output', $OutDir, '-gdi', $gdi, '-V', 'WINCE')
+if (-not $Full) { $bgArgs += '-truncate' }
+Write-Host ("buildgdi: {0} data track" -f ($(if ($Full) {'FULL padded'} else {'truncated (sparse)'})))
+& "$Utils\buildgdi.exe" @bgArgs | Out-Null
 if (-not (Test-Path (Join-Path $OutDir "track03.bin"))) { throw "buildgdi did not produce track03.bin" }
 
 # Parse the GDI for the track1/2 LBAs, synthesize standard low-density filler.
