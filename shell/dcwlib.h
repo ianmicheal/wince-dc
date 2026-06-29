@@ -29,6 +29,10 @@ void   DCWinText(DCWin *win, int x, int y, COLORREF fg, COLORREF bg, const WCHAR
 void   DCWinIcon(DCWin *win, int x, int y, int iconId);
 void   DCWinEndFrame(DCWin *win);          // publishes the frame atomically
 int    DCWinPollKey(DCWin *win, DWORD *key);   // returns 1 and a VK if one was queued
+// Live analog-stick cursor over this window's client area. Returns 1 with client-relative x/y
+// and btn (1 = primary button down) when the cursor is over this window; 0 when it isn't. Apps
+// edge-detect btn themselves for clicks and hit-test their own controls.
+int    DCWinGetPointer(DCWin *win, int *x, int *y, int *btn);
 int    DCWinShouldClose(DCWin *win);       // shell asked us to close
 // Current CLIENT size. The shell can resize/maximize the window, so apps should read this
 // each frame and lay out to fill it (fill the background to (cw,ch), stretch full-width

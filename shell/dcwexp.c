@@ -28,6 +28,13 @@ static int  EndsWithExe(const WCHAR *s)
     if (n < 4 || s[n-4] != L'.') return 0;
     return (s[n-3]|32) == 'e' && (s[n-2]|32) == 'x' && (s[n-1]|32) == 'e';
 }
+static int  EndsWithExt3(const WCHAR *s, WCHAR a, WCHAR b, WCHAR c)
+{
+    int n = lstrlenW(s);
+    if (n < 4 || s[n-4] != L'.') return 0;
+    return (s[n-3]|32) == a && (s[n-2]|32) == b && (s[n-1]|32) == c;
+}
+static int  IsAudio(const WCHAR *s) { return EndsWithExt3(s, 'm','p','3') || EndsWithExt3(s, 'w','a','v'); }
 static void JoinPath(WCHAR *o, const WCHAR *d, const WCHAR *nm)
 {
     if (d[1] == 0) wsprintfW(o, L"\\%s", nm); else wsprintfW(o, L"%s\\%s", d, nm);
@@ -75,6 +82,14 @@ static void EnterSel(void)
     {
         JoinPath(full, g_dir, e->name);
         DCWinExec(g_w, full);    // shell launches it (windowed dcw* or fullscreen hand-off)
+    }
+    else if (IsAudio(e->name))   // .mp3/.wav -> open in the music player with the path as its arg
+    {
+        WCHAR cmd[MAX_PATH + 16];
+        JoinPath(full, g_dir, e->name);
+        lstrcpyW(cmd, L"dcwplay.exe ");
+        lstrcatW(cmd, full);
+        DCWinExec(g_w, cmd);     // shell splits "dcwplay.exe <path>" into exe + arg
     }
 }
 

@@ -132,6 +132,15 @@ int DCWinPollKey(DCWin *win, DWORD *key)
     return 1;
 }
 
+int DCWinGetPointer(DCWin *win, int *x, int *y, int *btn)
+{
+    if (win->w->ptrX < 0) return 0;                 // analog-stick cursor not over this window
+    if (x)   *x   = (int)win->w->ptrX;
+    if (y)   *y   = (int)win->w->ptrY;
+    if (btn) *btn = (int)win->w->ptrBtn;
+    return 1;
+}
+
 int DCWinShouldClose(DCWin *win)
 {
     return win->w->wantClose != 0;

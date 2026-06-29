@@ -267,10 +267,16 @@ static BOOL IsDcwApp(const WCHAR *path)
     return (b[0]|32) == 'd' && (b[1]|32) == 'c' && (b[2]|32) == 'w';
 }
 
-static void ShellLaunch(const WCHAR *exe)
+static void ShellLaunch(const WCHAR *cmd)
 {
+    WCHAR        exe[MAX_PATH];
+    const WCHAR *args = NULL;
+    int          i;
+    for (i = 0; cmd[i] && cmd[i] != L' ' && i < MAX_PATH - 1; i++) exe[i] = cmd[i];   // split exe arg
+    exe[i] = 0;
+    if (cmd[i] == L' ') args = cmd + i + 1;   // e.g. "dcwplay.exe \CD-ROM\song.mp3"
     if (IsDcwApp(exe))
-        LaunchApp(exe, NULL);                 // windowed, composited
+        LaunchApp(exe, args);                 // windowed, composited (+ optional file argument)
     else
     {
         DbgStr(L"DCSHELL: fullscreen launch (display + input hand-off)\r\n");
@@ -890,6 +896,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+// Forward the analog-stick cursor to the window directly under it (client-relative), so client
+// apps can hit-test their own controls (buttons, sliders, seek bars). Topmost-under-cursor wins;
+// every other window gets ptrX = -1 (not over). Level-based - clients edge-detect btn for clicks.
+static void PublishPointer(int cx, int cy, int down)
+{
+    int order[DCWIN_MAXWIN], n = 0, top = -1, i, k;
+    if (!s_shared) return;
+    if (s_focus >= 0 && s_shared->win[s_focus].inUse && !s_winMin[s_focus]) order[n++] = s_focus;
+    for (k = 0; k < DCWIN_MAXWIN; k++)
+        if (s_shared->win[k].inUse && !s_winMin[k] && k != s_focus) order[n++] = k;
+    for (i = 0; i < n; i++)
+    {
+        DcWindow *w = &s_shared->win[order[i]];
+        if (cx >= w->x && cx < w->x + w->w && cy >= w->y && cy < w->y + w->h) { top = order[i]; break; }
+    }
+    for (k = 0; k < DCWIN_MAXWIN; k++)
+    {
+        DcWindow *w = &s_shared->win[k];
+        if (!w->inUse) continue;
+        if ((int)k == top) { w->ptrX = cx - w->x; w->ptrY = cy - w->y; w->ptrBtn = (DWORD)(down ? 1 : 0); }
+        else                 w->ptrX = -1;
+    }
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 {
     WNDCLASSW wc;
@@ -983,6 +1013,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
                 s_dragKind = DRAG_NONE; s_dragTarget = -1; s_dragMoved = 0; s_dirty = 1;
             }
             s_ptrWas = ptr;
+            PublishPointer(s_cx, s_cy, ptr);           // deliver the cursor to the window under it
         }
         // GWES WM-tap click path (DInPostClick) - independent of the held-button drag model.
         if (DInTookClick())

@@ -61,6 +61,8 @@ typedef struct
     DWORD inHead;           // shell writes here
     DWORD inTail;           // client reads here
     DcInput in[DCWIN_MAXIN];
+    LONG  ptrX, ptrY;       // shell -> client: analog-stick cursor in client coords (ptrX < 0 = not over)
+    DWORD ptrBtn;           // shell -> client: primary button (stick click / A) down = 1
 } DcWindow;
 
 typedef struct
