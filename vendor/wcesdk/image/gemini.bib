@@ -45,8 +45,14 @@ ENDIF
 ENDIF
 
 IF IMGHTML
+   ; IE needs the FULL CoreOS_HTML coredll/gwes/ole32: shdocvw/mshtml import GDI+USER+OLE by
+   ; ordinal (LoadCursorW, palette/region, TranslateAcceleratorW, StgOpenStorage, ...) that the
+   ; Standard "game" CoreOS simply doesn't export - on Standard coredll those ordinals resolve to
+   ; nothing and the control crashes (jump to an unmapped page) inside CoCreate(CLSID_WebBrowser).
+   ; filesys MUST stay Standard: the HTML filesys faults on our patched (Standard) kernel and the
+   ; CD-ROM never mounts. Standard filesys runs fine on the HTML coredll (it's an export superset).
    coredll.dll     $(_FLATRELEASEDIR)$(RELEASEDIR_HTMLCORE)coredll.dll      NK  SH
-   filesys.exe     $(_FLATRELEASEDIR)$(RELEASEDIR_HTMLCORE)filesys.exe      NK  SH
+   filesys.exe     $(_FLATRELEASEDIR)$(RELEASEDIR_HTMLFS)filesys.exe        NK  SH
    gwes.exe        $(_FLATRELEASEDIR)$(RELEASEDIR_HTMLCORE)gwes.exe         NK  SH
    ole32.dll       $(_FLATRELEASEDIR)$(RELEASEDIR_HTMLCORE)ole32.dll        NK  SH
 ENDIF
@@ -182,6 +188,10 @@ IF IMGTCIME
 ENDIF
 
 IF IMGHTML
+   ; The full IE/Trident stack is baked into the ROM image (NK.bin). A \CD-ROM-resident variant was
+   ; tried (to shrink the image) but wininet.dll fails to LoadLibrary from disc (DllMain-class init
+   ; failure even though all imports resolve), which cascades to urlmon/mshtml/shdocvw -> CoCreate
+   ; fails. ROM (XIP) is the known-good path, so the whole stack stays here.
    secur32.dll     $(_FLATRELEASEDIR)$(RELEASEDIR_OS)secur32.dll            NK  SH
    oleaut32.dll    $(_FLATRELEASEDIR)$(RELEASEDIR_OS)oleaut32.dll           NK  SH
    IECEExt.dll     $(_FLATRELEASEDIR)$(RELEASEDIR_OS)IECEExt.dll            NK  SH

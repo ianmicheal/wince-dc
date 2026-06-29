@@ -57,6 +57,9 @@ static const DWORD s_dpadVk[4] = { VK_UP, VK_DOWN, VK_LEFT, VK_RIGHT };  // matc
 #define JBTN(js, u) ((g_btnIdx[u] >= 0 && ((js).rgbButtons[g_btnIdx[u]] & 0x80)) ? 1 : 0)
 static int   g_dpadHeld[4];
 static DWORD g_dpadRepeatAt[4];
+// Raw face/Start button edges for DInButtonEdge (indices match DIN_BTN_* in dcinput.h).
+static int       g_beEdge[5], g_beHeld[5];
+static const int s_beUsg[5] = { USG_A, USG_B, USG_X, USG_Y, USG_START };
 static int   g_mousePrimed = 0;                    // skip edge events on first read
 static DWORD g_joyPrimeUntil = 0;                  // joy: track baseline (no edges) until this tick
 #define JOY_PRIME_MS 400                           // startup settle window for the controller
@@ -221,6 +224,7 @@ void DInReacquire(void)
     memset(g_last, 0, sizeof(g_last));
     g_joyPrimeUntil = GetTickCount() + JOY_PRIME_MS; g_mousePrimed = 0;
     g_qh = g_qt = 0;                 // drop any queued keys from before the hand-off
+    memset(g_beEdge, 0, sizeof(g_beEdge)); memset(g_beHeld, 0, sizeof(g_beHeld));
     OutputDebugStringW(L"DCIN: reacquired input\r\n");
 }
 
@@ -316,6 +320,7 @@ void DInUpdate(void)
                 // device's transient first reads settle so they can't fire a phantom activate).
                 for (i = 0; i < 4; i++) g_dpadHeld[i] = dn[i];
                 g_btnLast = face;
+                { int k; for (k = 0; k < 5; k++) g_beHeld[k] = JBTN(js, s_beUsg[k]); }
             }
             else
             {
@@ -329,6 +334,16 @@ void DInUpdate(void)
                 // A / Start -> "activate" (D-pad selects, A opens the selection)
                 if (face && !g_btnLast) g_activate = 1;
                 g_btnLast = face;
+                // Raw per-button edges for DInButtonEdge (browser etc.); independent of activate.
+                {
+                    int k;
+                    for (k = 0; k < 5; k++)
+                    {
+                        int d = JBTN(js, s_beUsg[k]);
+                        if (d && !g_beHeld[k]) g_beEdge[k] = 1;
+                        g_beHeld[k] = d;
+                    }
+                }
             }
         }
     }
@@ -359,3 +374,4 @@ int  DInHasPointer(void)        { return (g_mouse != NULL) || (g_joy != NULL) ||
 void DInCursor(int *x, int *y)  { *x = g_cx; *y = g_cy; }
 int  DInTookClick(void)         { int c = g_click; g_click = 0; return c; }
 int  DInPointerDown(void)       { return g_mHeld || g_jHeld; }   // pointer button currently HELD (drag)
+int  DInButtonEdge(int btn)     { int e; if (btn < 0 || btn > 4) return 0; e = g_beEdge[btn]; g_beEdge[btn] = 0; return e; }

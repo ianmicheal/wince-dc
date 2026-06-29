@@ -10,9 +10,15 @@
 #ifndef DCGFX_H
 #define DCGFX_H
 
-#define CINTERFACE
+// NOTE: dcgfx.c defines CINTERFACE itself before including ddraw/d3d (C-style COM). It is
+// deliberately NOT defined here so C++ consumers (iexplore.cpp, which hosts the WebBrowser
+// control via C++ COM) can include this header without turning every COM interface C-style.
 #include <windows.h>
 #include "dcwin.h"     // ICON_* ids (shared with the compositor protocol)
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #define SCREEN_W 640
 #define SCREEN_H 480
@@ -74,8 +80,22 @@ void GfxBlitDesktopCache(void);
 // Block until the PVR vblank (~60Hz) - pace the loop without Sleep's 50ms-tick rounding.
 HRESULT GfxWaitVBlank(void);
 
+//
+// Page layer (for the browser): the Trident WebBrowser control renders via GWES into the
+// GDI framebuffer, which the PVR does NOT scan out while we hold the DDraw flip primary. So
+// we wrap that framebuffer (GETGDIINFO + MmMapIoSpace) and each frame BltFast the requested
+// region into a VRAM texture, drawn as a normal compositor quad. GfxInitPageLayer once after
+// GfxInit; GfxBlitPage(src rect in screen/GDI coords -> dst rect on our scene) per frame.
+//
+BOOL GfxInitPageLayer(void);
+void GfxBlitPage(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh);
+
 extern HFONT g_FontUI;
 extern HFONT g_FontBold;
 extern HFONT g_FontTitle;
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // DCGFX_H

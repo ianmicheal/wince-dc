@@ -109,7 +109,7 @@ add_sh_module(mppp TYPE dll ENTRY dllentry DEF ${REPO}/net/netif/netif.def OUT m
 # ---- DCWin desktop shell + PVR2 compositor ----------------------------------------
 add_sh_module(dcshell TYPE exe ENTRY WinMainCRTStartup OUT dcshell.exe
   SOURCES ${REPO}/shell/dcshell.c ${REPO}/shell/dcgfx.c ${REPO}/shell/dcinput.c ${REPO}/shell/vmustore.c
-  LIBS coredll.lib corelibc.lib ddraw.lib d3dim.lib dinput.lib dxguid.lib mapledev.lib psguid.lib)
+  LIBS coredll.lib corelibc.lib ddraw.lib d3dim.lib dinput.lib dxguid.lib mapledev.lib psguid.lib wdm.lib)
 
 # ---- DCWin client apps (each links the client lib) --------------------------------
 foreach(app dcwcalc dcwclock dcwexp dcwtask dcwmem)
@@ -124,10 +124,19 @@ add_sh_module(dcwlog TYPE exe ENTRY WinMainCRTStartup OUT dcwlog.exe   # the Sys
   SOURCES ${REPO}/shell/dcwlog.c ${REPO}/shell/dcwlib.c ${REPO}/shell/syslog.c
   LIBS coredll.lib corelibc.lib)
 
+# ---- Internet Explorer: fullscreen Trident WebBrowser host -------------------------
+# NOT a dcw* app: the shell launches it via the display hand-off (GfxLaunch), so it owns
+# the GWES display and hosts the stock WebBrowser control. Needs IMGHTML=1 in the image.
+add_sh_module(iexplore TYPE exe ENTRY WinMainCRTStartup OUT iexplore.exe
+  SOURCES ${REPO}/shell/iexplore.cpp ${REPO}/shell/iehost.cpp ${REPO}/shell/ieproto.cpp
+          ${REPO}/shell/dcgfx.c ${REPO}/shell/dcinput.c
+  LIBS coredll.lib corelibc.lib ole32.lib oleaut32.lib uuid.lib winsock.lib urlmon.lib
+       ddraw.lib d3dim.lib dinput.lib dxguid.lib mapledev.lib psguid.lib wdm.lib)
+
 # ---- boot screen (autorun): D3D logo + live checklist, then launches dcshell -------
 add_sh_module(dcwboot TYPE exe ENTRY WinMainCRTStartup OUT dcwboot.exe
   SOURCES ${REPO}/shell/dcwboot.c ${REPO}/shell/dcgfx.c ${REPO}/shell/dcboot.c
-  LIBS coredll.lib corelibc.lib ddraw.lib d3dim.lib dxguid.lib winsock.lib)
+  LIBS coredll.lib corelibc.lib ddraw.lib d3dim.lib dxguid.lib winsock.lib wdm.lib)
 
 # ---- music player: WAV + MP3 (minimp3), DirectSound, spectrum viz, clickable UI ----
 # Built but NOT baked into the ROM (no platform.bib entry) - keep it compiling without bloating
@@ -194,7 +203,13 @@ set(IMG_ENV
   # forward slashes on purpose: a trailing '\' would escape the closing quote on the
   # command line and blank the var (romimage then collapses every path to flat). Win32
   # accepts mixed separators, so $(_FLATRELEASEDIR)/OS/foo.dll resolves fine.
+  # IMGHTML core split: IE (shdocvw/mshtml) needs the FULL CoreOS_HTML coredll/gwes/ole32 (it
+  # imports GDI/USER/OLE by ordinal that the Standard "game" CoreOS doesn't export). But filesys
+  # must stay Standard - the HTML filesys.exe faults on our patched (Standard) kernel and the
+  # CD-ROM never mounts. Standard filesys runs on the HTML coredll (export superset). The open
+  # risk this tests on HW: whether the HTML coredll/gwes run on the Standard patched kernel.
   "RELEASEDIR_STDCORE=/CoreOS_Standard/" "RELEASEDIR_HTMLCORE=/CoreOS_HTML/"
+  "RELEASEDIR_HTMLFS=/CoreOS_Standard/"   # filesys only: kernel-matched for the CD-ROM mount
   "RELEASEDIR_OS=/OS/" "RELEASEDIR_SAMPLES=/Samples/" "RELEASEDIR_APPS=/Applications/"
   "${KERNEL_IMGFLAG}" "IMGNOSHELL=1" "IMGDIRECTDRAW=1" "IMGDIRECT3DIM=1" "IMGDDHAL=1"
   "IMGDIRECTSOUND=1" "IMGDIRECTINPUT=1" "IMGMICROSTK=1" "IMGNOCOMM=1" "IMGNOPCMCIA=1"
@@ -202,6 +217,15 @@ set(IMG_ENV
   "INITDIRECTSHOW=1" "COUNTRY=USA" "_HOSTCPUTYPE=i386" "_TGTPROJ=DRAGON"
   "_DEPTREES=winceos gemini mcputech dshowdm6"
   "WCEDREAMCASTROOT=${SDK_NAT}" "_PUBLICROOT=${SDK_NAT}" "_FLATRELEASEDIR=${IMG_WORK_NAT}")
+
+# IMGHTML bakes the Trident/IE stack (mshtml/shdocvw/wininet/urlmon/jscript/schannel/imgutil/
+# pngfilt/mlang/oleaut32 + their gemini.reg COM registration) into NK.bin, for iexplore.exe.
+# It pulls ~3.3 MB + a large registry; toggle off (-DHTML=off) to get the lean image back.
+option(HTML "bake the Trident/IE stack (IMGHTML) for the browser" OFF)
+if(HTML)
+  list(APPEND IMG_ENV "IMGHTML=1")
+endif()
+message(STATUS "image: HTML(IMGHTML)=${HTML}")
 
 # Prep the work-dir (seed + optional debug overlay + our modules + Autorun) then makeimg.
 add_custom_command(OUTPUT ${NKBIN}
@@ -226,15 +250,32 @@ add_custom_target(image DEPENDS ${WINCEOS})
 #   -DEXTRADATA=<dir>  optional folder whose contents go into the disc's \CD-ROM
 #                      (e.g. a game's files; our 0winceos.bin always overrides 0WINCEOS.BIN).
 set(EXTRADATA "" CACHE STRING "optional folder whose contents go into the disc's \\CD-ROM (relative paths resolve against the repo root)")
-set(GDI_EXTRA "")
+# \CD-ROM staging dir. We deliberately keep some apps OUT of the ROM (NK.bin) to keep the image
+# lean, and ship them on the disc instead: dcwplay.exe (self-contained media player) always, and
+# iexplore.exe only with -DHTML=on (it needs the IMGHTML DLL stack, which must stay in the ROM).
+set(CDROM ${CMAKE_BINARY_DIR}/cdrom)
+set(GDI_STAGE
+  COMMAND ${CMAKE_COMMAND} -E rm -rf ${CDROM}
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${CDROM}
+  COMMAND ${CMAKE_COMMAND} -E copy ${OUTDIR}/dcwplay.exe ${CDROM}/dcwplay.exe)
+if(HTML)
+  # The IE/Trident DLLs stay in the ROM (gemini.bib IMGHTML) - the \CD-ROM variant failed (wininet
+  # won't LoadLibrary from disc). Only the iexplore.exe launcher ships on the disc.
+  list(APPEND GDI_STAGE COMMAND ${CMAKE_COMMAND} -E copy ${OUTDIR}/iexplore.exe ${CDROM}/iexplore.exe)
+endif()
 if(EXTRADATA)
   get_filename_component(EXTRADATA_ABS "${EXTRADATA}" ABSOLUTE BASE_DIR "${REPO}")
-  set(GDI_EXTRA -ExtraData "${EXTRADATA_ABS}")
+  list(APPEND GDI_STAGE COMMAND ${CMAKE_COMMAND} -E copy_directory "${EXTRADATA_ABS}" ${CDROM})
   message(STATUS "gdi: EXTRADATA=${EXTRADATA_ABS}")
 endif()
 add_custom_target(gdi
+  ${GDI_STAGE}
   COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File ${REPO}/toolchain/make-gdi.ps1
-          -Image ${WINCEOS} -OutDir ${DISCDIR} ${GDI_EXTRA}
+          -Image ${WINCEOS} -OutDir ${DISCDIR} -ExtraData ${CDROM}
   DEPENDS ${WINCEOS}
-  COMMENT "make-gdi: 0winceos.bin -> disc.gdi"
+  COMMENT "make-gdi: 0winceos.bin (+ disc apps) -> disc.gdi"
   USES_TERMINAL)
+add_dependencies(gdi dcwplay)
+if(HTML)
+  add_dependencies(gdi iexplore)
+endif()

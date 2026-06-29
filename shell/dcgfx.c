@@ -12,9 +12,15 @@
 // live in PVR VRAM (the atlas), off the SH-4 bus. Constraints: DP1 path only (DP2 is
 // a trap stub), NO Z buffer (submit-order Z), color-key -> alpha=0 at atlas upload.
 //
+#define CINTERFACE          // C-style DDraw/D3D COM (dcgfx.h no longer defines this)
 #include "dcgfx.h"
 #include <ddraw.h>
 #include <d3d.h>
+#include <wdm.h>            // MmMapIoSpace / PHYSICAL_ADDRESS (page-layer framebuffer map)
+
+// GDI framebuffer info from the display driver (ExtEscape GETGDIINFO), as in the SDK htmlsamp.
+typedef struct { int width, height, stride; unsigned long physicalAddr; } GDISurfaceInfo;
+#define GETGDIINFO 6500
 
 #define KEY       0xF81F           // 565 magenta = transparent key (atlas -> alpha 0)
 #define ATLAS_DIM 512
@@ -43,6 +49,14 @@ static BOOL                s_d3dOk   = FALSE;
 static LPDIRECTDRAWSURFACE s_atlasSurf = NULL;   // VRAM atlas (kept alive while bound)
 static LPDIRECT3DTEXTURE2  s_atlasTex  = NULL;
 static D3DTEXTUREHANDLE    s_hAtlas    = 0;
+
+// Page layer (browser): GWES framebuffer wrap -> VRAM texture quad. See GfxInitPageLayer.
+static LPDIRECTDRAWSURFACE s_gdiSurf  = NULL;    // system-mem surface aliasing the GDI framebuffer
+static LPDIRECTDRAWSURFACE s_pageSurf = NULL;    // VRAM texture the page is blitted into
+static LPDIRECT3DTEXTURE2  s_pageTex  = NULL;
+static D3DTEXTUREHANDLE    s_hPage    = 0;
+#define PAGE_TW 1024                              // page texture is pow2 and >= 640x480
+#define PAGE_TH 512
 
 // Retained quad list (the scene), replayed every frame. Indices are base-relative.
 static D3DTLVERTEX s_vb[MAX_QUADS * 4];
@@ -454,6 +468,10 @@ static BOOL CreateSurfaces(void)
 
 static void DestroySurfaces(void)
 {
+    s_hPage = 0;                                  // page layer (browser only; NULL elsewhere)
+    if (s_pageTex)  { IDirect3DTexture2_Release(s_pageTex);   s_pageTex  = NULL; }
+    if (s_pageSurf) { IDirectDrawSurface_Release(s_pageSurf); s_pageSurf = NULL; }
+    if (s_gdiSurf)  { IDirectDrawSurface_Release(s_gdiSurf);  s_gdiSurf  = NULL; }
     s_back = NULL;
     s_useFlip = FALSE;
     if (s_primary) { IDirectDrawSurface_Release(s_primary); s_primary = NULL; }
@@ -619,8 +637,10 @@ BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor)
         {
             BYTE tex = s_qtex[i];
             int  j = i;
+            D3DTEXTUREHANDLE th;
             while (j < s_nQuad && s_qtex[j] == tex) j++;
-            IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_TEXTUREHANDLE, tex ? s_hAtlas : 0);
+            th = (tex == 2) ? s_hPage : (tex == 1) ? s_hAtlas : 0;   // 2 = page, 1 = atlas, 0 = solid
+            IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_TEXTUREHANDLE, th);
             // Pass ONLY this run's vertices (&s_vb[i*4], (j-i)*4) with the base-relative
             // index template s_ib[0..]. Passing the whole array each batch made the TA
             // re-transform every vertex per batch -> O(verts x batches) -> the 56ms spike.
@@ -647,6 +667,91 @@ HRESULT GfxWaitVBlank(void)
 {
     if (!s_dd) return E_FAIL;
     return IDirectDraw_WaitForVerticalBlank(s_dd, DDWAITVB_BLOCKBEGIN, NULL);
+}
+
+//
+// Page layer: alias the GWES GDI framebuffer as a system-mem DDraw surface, and create a VRAM
+// texture the page region is BltFast'd into each frame. Mirrors the SDK htmlsamp draw.cpp trick
+// (GETGDIINFO -> MmMapIoSpace -> IDirectDrawSurface3::SetSurfaceDesc(lpSurface=...)).
+//
+BOOL GfxInitPageLayer(void)
+{
+    GDISurfaceInfo        info;
+    DDSURFACEDESC         sd;
+    LPDIRECTDRAWSURFACE   sys = NULL;
+    LPDIRECTDRAWSURFACE3  sys3 = NULL;
+    PHYSICAL_ADDRESS      pa;
+    void                 *bits;
+    HDC                   dc;
+
+    if (!s_dd || !s_dev) return FALSE;
+
+    dc = GetDC(NULL);
+    memset(&info, 0, sizeof(info));
+    if (!dc || ExtEscape(dc, GETGDIINFO, 0, 0, sizeof(info), (LPSTR)&info) <= 0)
+    { if (dc) ReleaseDC(NULL, dc); OutputDebugStringW(L"page: GETGDIINFO FAIL\r\n"); return FALSE; }
+    ReleaseDC(NULL, dc);
+
+    { WCHAR b[128]; wsprintfW(b, L"page: GETGDIINFO w=%d h=%d stride=%d phys=%08x\r\n",
+        info.width, info.height, info.stride, (unsigned)info.physicalAddr); OutputDebugStringW(b); }
+
+    pa.HighPart = 0; pa.LowPart = info.physicalAddr;
+    bits = MmMapIoSpace(pa, (ULONG)(info.height * info.stride), TRUE);
+    if (!bits) { OutputDebugStringW(L"page: MmMapIoSpace FAIL\r\n"); return FALSE; }
+
+    // system-mem surface, then re-point it at the GDI framebuffer via IDirectDrawSurface3.
+    // Pin the format to 565 so BltFast to the 565 page texture is a straight copy (a format
+    // mismatch shows up as vertical RGB striping over the recognizable image).
+    memset(&sd, 0, sizeof(sd)); sd.dwSize = sizeof(sd);
+    sd.dwFlags = DDSD_CAPS | DDSD_HEIGHT | DDSD_WIDTH;
+    sd.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+    sd.dwWidth = info.width; sd.dwHeight = info.height;
+    if (IDirectDraw_CreateSurface(s_dd, &sd, &sys, NULL) != DD_OK || !sys)
+    { OutputDebugStringW(L"page: gdi surface create FAIL\r\n"); return FALSE; }
+    if (IDirectDrawSurface_QueryInterface(sys, &IID_IDirectDrawSurface3, (void **)&sys3) == DD_OK && sys3)
+    {
+        memset(&sd, 0, sizeof(sd)); sd.dwSize = sizeof(sd);
+        sd.dwFlags    = DDSD_HEIGHT | DDSD_WIDTH | DDSD_LPSURFACE | DDSD_PITCH | DDSD_PIXELFORMAT;
+        sd.dwWidth    = info.width; sd.dwHeight = info.height;
+        sd.lPitch     = info.stride; sd.lpSurface = bits;
+        sd.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+        sd.ddpfPixelFormat.dwFlags = DDPF_RGB; sd.ddpfPixelFormat.dwRGBBitCount = 16;
+        sd.ddpfPixelFormat.dwRBitMask = 0xF800; sd.ddpfPixelFormat.dwGBitMask = 0x07E0; sd.ddpfPixelFormat.dwBBitMask = 0x001F;
+        if (IDirectDrawSurface3_SetSurfaceDesc(sys3, &sd, 0) != DD_OK)
+            OutputDebugStringW(L"page: SetSurfaceDesc FAIL\r\n");
+        IDirectDrawSurface3_Release(sys3);
+    }
+    s_gdiSurf = sys;
+
+    // VRAM texture (565) the page is blitted into; bound as a normal compositor texture
+    memset(&sd, 0, sizeof(sd)); sd.dwSize = sizeof(sd);
+    sd.dwFlags        = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+    sd.ddsCaps.dwCaps = DDSCAPS_TEXTURE | DDSCAPS_VIDEOMEMORY;
+    sd.dwWidth = PAGE_TW; sd.dwHeight = PAGE_TH;
+    sd.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+    sd.ddpfPixelFormat.dwFlags = DDPF_RGB; sd.ddpfPixelFormat.dwRGBBitCount = 16;
+    sd.ddpfPixelFormat.dwRBitMask = 0xF800; sd.ddpfPixelFormat.dwGBitMask = 0x07E0; sd.ddpfPixelFormat.dwBBitMask = 0x001F;
+    if (IDirectDraw_CreateSurface(s_dd, &sd, &s_pageSurf, NULL) != DD_OK || !s_pageSurf)
+    { OutputDebugStringW(L"page: vram texture create FAIL\r\n"); return FALSE; }
+    if (IDirectDrawSurface_QueryInterface(s_pageSurf, &IID_IDirect3DTexture2, (void **)&s_pageTex) != DD_OK ||
+        IDirect3DTexture2_GetHandle(s_pageTex, s_dev, &s_hPage) != DD_OK)
+    { OutputDebugStringW(L"page: texture handle FAIL\r\n"); return FALSE; }
+
+    OutputDebugStringW(L"page: layer ready\r\n");
+    return TRUE;
+}
+
+// Blit a GDI-framebuffer rect into the page texture and queue it as a compositor quad.
+void GfxBlitPage(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh)
+{
+    RECT src;
+    if (!s_gdiSurf || !s_pageSurf || !s_hPage) return;
+    if (sw > PAGE_TW) sw = PAGE_TW;
+    if (sh > PAGE_TH) sh = PAGE_TH;
+    src.left = sx; src.top = sy; src.right = sx + sw; src.bottom = sy + sh;
+    IDirectDrawSurface_BltFast(s_pageSurf, 0, 0, s_gdiSurf, &src, DDBLTFAST_WAIT);
+    PushQuad((float)dx, (float)dy, (float)(dx + dw), (float)(dy + dh),
+             0.0f, 0.0f, (float)sw / PAGE_TW, (float)sh / PAGE_TH, 0xFFFFFFFF, 2);
 }
 
 void GfxLaunch(const WCHAR *path)

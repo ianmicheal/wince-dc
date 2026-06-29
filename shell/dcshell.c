@@ -637,7 +637,7 @@ static void ActivateStartItem(void)
     if (s->path)
         LaunchApp(L"dcwexp.exe", s->path);     // Explorer window at this path
     else if (s->exe)
-        LaunchApp(s->exe, NULL);
+        ShellLaunch(s->exe);                   // dcw* -> composited; others -> display hand-off
 }
 
 static void OnKey(WPARAM wp)
@@ -691,7 +691,7 @@ static void OnKey(WPARAM wp)
         if (s_desk[s_deskSel].path)
             LaunchApp(L"dcwexp.exe", s_desk[s_deskSel].path);   // Explorer window
         else
-            LaunchApp(s_desk[s_deskSel].exe, NULL);
+            ShellLaunch(s_desk[s_deskSel].exe);                 // hand off the display for non-dcw apps
     }
 }
 
@@ -777,7 +777,7 @@ static int HandleClick(int x, int y)
         {
             s_deskSel = k;
             if (s_desk[k].path) LaunchApp(L"dcwexp.exe", s_desk[k].path);
-            else                LaunchApp(s_desk[k].exe, NULL);
+            else                ShellLaunch(s_desk[k].exe);
             return 1;
         }
     }

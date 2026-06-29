@@ -9,6 +9,10 @@
 
 #include <windows.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 BOOL DInInit(HWND hwnd);     // TRUE if a DI keyboard was acquired (use it, not WM_KEYDOWN)
 void DInShutdown(void);
 void DInUpdate(void);        // poll all devices; call once per loop
@@ -23,9 +27,23 @@ int  DInTookClick(void);     // TRUE once per mouse click (cursor paradigm)
 int  DInTookActivate(void);  // TRUE once per controller face-button press (-> Enter)
 int  DInPointerDown(void);   // TRUE while the pointer button is held (mouse-L / controller-A) - for drag
 
+// Per-button controller edges, for apps that need the raw face/Start buttons (e.g. the
+// browser maps B=back, Y=forward, X=exit, Start=address). 1 once per press; the shell's
+// own cursor/activate model (DInTookActivate) is unaffected.
+#define DIN_BTN_A      0
+#define DIN_BTN_B      1
+#define DIN_BTN_X      2
+#define DIN_BTN_Y      3
+#define DIN_BTN_START  4
+int  DInButtonEdge(int btn);   // 1 once when DIN_BTN_* transitions to pressed
+
 // GWES WM_MOUSE* fallback feed (the shell forwards window mouse messages here in
 // case the DC mouse reaches WinCE through the window queue, not DirectInput).
 void DInSetCursor(int x, int y);   // absolute client coords
 void DInPostClick(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // DCINPUT_H

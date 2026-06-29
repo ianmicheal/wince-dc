@@ -1,6 +1,7 @@
 # --- our build OUTPUTS only (regenerated; not committed) ---
 # CMake build tree (modules, image work-dir, disc) - all regenerated
 build/
+build-html/
 reference/*.bin
 reference/kernel-obj/
 toolchain/smoke/
