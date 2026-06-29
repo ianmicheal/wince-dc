@@ -136,8 +136,11 @@ static HANDLE V_CreateFile(void *vol, HANDLE hProc, const WCHAR *name, DWORD acc
     f = (SDFILE *)LocalAlloc(LPTR, sizeof(SDFILE));
     if (!f) { SetLastError(ERROR_OUTOFMEMORY); return INVALID_HANDLE_VALUE; }
     LOCK();
-    if (f_open(&f->fil, name, mode) == FR_OK)
-        h = CreateAPIHandle(g_hFile, f);
+    {
+        FRESULT fr = f_open(&f->fil, name, mode);
+        SysLog(L"sd: CreateFile '%s' acc=%x cr=%d -> f_open=%d", name ? name : L"(null)", access, creation, fr);
+        if (fr == FR_OK) h = CreateAPIHandle(g_hFile, f);
+    }
     UNLOCK();
     if (h == 0 || h == INVALID_HANDLE_VALUE) { LocalFree(f); SetLastError(ERROR_FILE_NOT_FOUND); return INVALID_HANDLE_VALUE; }
     return h;
@@ -195,17 +198,47 @@ static BOOL  V_GetDiskFreeSpace(void *vol, const WCHAR *path, DWORD *spc, DWORD 
 }
 
 // ---- FILE callbacks (14; order per the reversed HCDF table) ----------------------------
+// GetFileInformationByHandle (slot 6): the CE module loader calls this to size/validate an
+// image before paging its code sections. wsegacd (which launches \CD-ROM\DC.EXE) fills a full
+// BY_HANDLE_FILE_INFORMATION and returns TRUE; our old V_NoSupport stub returned FALSE -> the
+// loader faulted -> kernel reset. Fill attributes + size + (zero) times + dwOID like wsegacd.
+static BOOL F_GetInfo(SDFILE *f, BY_HANDLE_FILE_INFORMATION *bhfi)
+{
+    DWORD sz;
+    if (!f || !bhfi) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    LOCK(); sz = f_size(&f->fil); UNLOCK();
+    memset(bhfi, 0, sizeof(*bhfi));
+    bhfi->dwFileAttributes = FILE_ATTRIBUTE_ARCHIVE;
+    bhfi->nFileSizeLow     = sz;
+    bhfi->nNumberOfLinks   = 1;
+    bhfi->dwOID            = 0xFFFFFFFF;
+    SysLog(L"sd: F_GetInfo -> size=%u", sz);
+    return TRUE;
+}
+
+// GetFileTime (slot 8): loader may probe it; return zeroed (valid) times, TRUE.
+static BOOL F_GetFileTime(SDFILE *f, FILETIME *cre, FILETIME *acc, FILETIME *wri)
+{
+    FILETIME z = { 0, 0 };
+    if (!f) { SetLastError(ERROR_INVALID_PARAMETER); return FALSE; }
+    if (cre) *cre = z; if (acc) *acc = z; if (wri) *wri = z;
+    return TRUE;
+}
+
+static int F_UnsupSetTime(void) { SysLog(L"sd: file SetFileTime (slot9) called"); SetLastError(ERROR_NOT_SUPPORTED); return 0; }
+static int F_UnsupIoctl(void)   { SysLog(L"sd: file DeviceIoControl (slot11) called"); SetLastError(ERROR_NOT_SUPPORTED); return 0; }
+
 static BOOL  F_Close(SDFILE *f)
-{ BOOL r; if (!f) return FALSE; LOCK(); r = (f_close(&f->fil) == FR_OK); UNLOCK(); LocalFree(f); return r; }
+{ BOOL r; if (!f) return FALSE; SysLog(L"sd: F_Close"); LOCK(); r = (f_close(&f->fil) == FR_OK); UNLOCK(); LocalFree(f); return r; }
 
 static BOOL  F_Read(SDFILE *f, void *buf, DWORD cb, DWORD *pcb, void *ovl)
-{ UINT br = 0; BOOL r; (void)ovl; if (!f) return FALSE; LOCK(); r = (f_read(&f->fil, buf, cb, &br) == FR_OK); UNLOCK(); if (pcb) *pcb = br; return r; }
+{ UINT br = 0; BOOL r; (void)ovl; if (!f) return FALSE; LOCK(); r = (f_read(&f->fil, buf, cb, &br) == FR_OK); UNLOCK(); if (pcb) *pcb = br; SysLog(L"sd: F_Read cb=%u -> r=%d br=%u", cb, r, br); return r; }
 
 static BOOL  F_Write(SDFILE *f, const void *buf, DWORD cb, DWORD *pcb, void *ovl)
 { UINT bw = 0; BOOL r; (void)ovl; if (!f) return FALSE; LOCK(); r = (f_write(&f->fil, buf, cb, &bw) == FR_OK); UNLOCK(); if (pcb) *pcb = bw; return r; }
 
 static DWORD F_GetSize(SDFILE *f, DWORD *high)
-{ DWORD sz; if (!f) return 0; LOCK(); sz = f_size(&f->fil); UNLOCK(); if (high) *high = 0; return sz; }
+{ DWORD sz; if (!f) return 0; LOCK(); sz = f_size(&f->fil); UNLOCK(); if (high) *high = 0; SysLog(L"sd: F_GetSize -> %u", sz); return sz; }
 
 static DWORD F_SetPointer(SDFILE *f, LONG lo, LONG *high, DWORD method)
 {
@@ -226,7 +259,7 @@ static BOOL  F_SetEnd(SDFILE *f)
 { BOOL r; if (!f) return FALSE; LOCK(); r = (f_truncate(&f->fil) == FR_OK); UNLOCK(); return r; }
 
 static BOOL  F_ReadSeek(SDFILE *f, void *buf, DWORD cb, DWORD *pcb, void *ovl, DWORD lo, DWORD hi)
-{ UINT br = 0; BOOL r; (void)ovl; (void)hi; if (!f) return FALSE; LOCK(); f_lseek(&f->fil, lo); r = (f_read(&f->fil, buf, cb, &br) == FR_OK); UNLOCK(); if (pcb) *pcb = br; return r; }
+{ UINT br = 0; BOOL r; (void)ovl; (void)hi; if (!f) return FALSE; LOCK(); f_lseek(&f->fil, lo); r = (f_read(&f->fil, buf, cb, &br) == FR_OK); UNLOCK(); if (pcb) *pcb = br; SysLog(L"sd: F_ReadSeek off=%u cb=%u -> r=%d br=%u", lo, cb, r, br); return r; }
 
 static BOOL  F_WriteSeek(SDFILE *f, const void *buf, DWORD cb, DWORD *pcb, void *ovl, DWORD lo, DWORD hi)
 { UINT bw = 0; BOOL r; (void)ovl; (void)hi; if (!f) return FALSE; LOCK(); f_lseek(&f->fil, lo); r = (f_write(&f->fil, buf, cb, &bw) == FR_OK); UNLOCK(); if (pcb) *pcb = bw; return r; }
@@ -263,8 +296,8 @@ static const DWORD g_volSigs[17] = {
 
 static const APIFN g_fileMethods[14] = {
     (APIFN)F_Close, (APIFN)V_NoSupport, (APIFN)F_Read, (APIFN)F_Write, (APIFN)F_GetSize,
-    (APIFN)F_SetPointer, (APIFN)V_NoSupport /*GetFileInfo*/, (APIFN)F_Flush, (APIFN)V_NoSupport /*GetFileTime*/,
-    (APIFN)V_NoSupport /*SetFileTime*/, (APIFN)F_SetEnd, (APIFN)V_NoSupport /*DeviceIoControl*/,
+    (APIFN)F_SetPointer, (APIFN)F_GetInfo /*GetFileInfo*/, (APIFN)F_Flush, (APIFN)F_GetFileTime /*GetFileTime*/,
+    (APIFN)F_UnsupSetTime /*SetFileTime*/, (APIFN)F_SetEnd, (APIFN)F_UnsupIoctl /*DeviceIoControl*/,
     (APIFN)F_ReadSeek, (APIFN)F_WriteSeek };
 static const DWORD g_fileSigs[14] = {
     0,0,0x144,0x144,4,0x10,4,0,0x54,0x54,0,0x5110,0x144,0x144 };

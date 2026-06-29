@@ -90,7 +90,7 @@ add_sh_module(dcspi TYPE dll ENTRY DllMain DEF ${REPO}/drivers/dcspi/dcspi.def O
 # ---- SD-card storage: SD block driver + ChaN FatFs (WDM/AFS mount layer is WIP) ----
 add_sh_module(sdcard TYPE dll ENTRY DllMain OUT sdcard.dll
   SOURCES ${REPO}/drivers/sdcard/sdcard.c ${REPO}/drivers/sdcard/sdblk.c
-          ${REPO}/drivers/sdcard/diskio.c ${REPO}/shell/syslog.c
+          ${REPO}/drivers/sdcard/diskio.c ${REPO}/shell/syslog.c ${REPO}/shell/dcboot.c
           ${REPO}/drivers/sdcard/fatfs/ff.c ${REPO}/drivers/sdcard/fatfs/ccsbcs.c
   INCLUDES ${REPO}/drivers/sdcard ${REPO}/drivers/sdcard/fatfs ${REPO}/drivers/dcspi ${REPO}/shell
   LIBS coredll.lib corelibc.lib wdm.lib

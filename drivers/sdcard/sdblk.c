@@ -6,9 +6,16 @@
 #include "../dcspi/dcspi.h"
 #include "sdblk.h"
 #include "syslog.h"
+#include "dcboot.h"
 
 #define BUS  DCSPI_BUS_SCIF        // SD adapter wired to the serial port (CS on RTS)
 #define CSM  DCSPI_CS_RTS
+
+// SCIF bit-bang clock periods (inter-edge settle). SD spec: <=400 kHz during init, fast after.
+// The W5500's fast value (~32) overclocks SD power-up on real hardware (CMD0 CRC errors,
+// ACMD41 stalls), so run init slow then switch to fast for block I/O.
+#define SD_INIT_SETTLE 400
+#define SD_RUN_SETTLE  32
 
 // SD commands (index, sent as 0x40|idx)
 #define CMD0    0     // GO_IDLE_STATE
@@ -89,6 +96,7 @@ int SdInit(void)
     SysLog(L"sd: SdInit enter");
     if (SpiInit(BUS, CSM)) { SysLog(L"sd: SpiInit FAILED"); return -1; }
     SysLog(L"sd: SpiInit ok (SCIF)");
+    SpiSetSettle(SD_INIT_SETTLE);                   // <=400 kHz for the bring-up sequence
 
     cs(0);                                          // CS high during the power-up clocks
     for (i = 0; i < 10; i++) wb(0xFF);              // >= 74 clocks
@@ -98,11 +106,16 @@ int SdInit(void)
     SysLog(L"sd: CMD0 -> %02x", r);
     if (r != 0x01) { cs(0); return -2; }                         // enter idle/SPI mode
 
-    if (sd_cmd(CMD8, 0x000001AA) == 0x01)                        // v2 card
     {
-        for (i = 0; i < 4; i++) ocr[i] = rb();                   // R7 trailer
-        if (ocr[2] != 0x01 || ocr[3] != 0xAA) { cs(0); return -3; }
-        v2 = 1;
+        unsigned char r8 = sd_cmd(CMD8, 0x000001AA);            // v2 card check
+        if (r8 == 0x01)
+        {
+            for (i = 0; i < 4; i++) ocr[i] = rb();              // R7 trailer
+            SysLog(L"sd: CMD8 r=01 echo=%02x%02x", ocr[2], ocr[3]);
+            if (ocr[2] != 0x01 || ocr[3] != 0xAA) { cs(0); return -3; }
+            v2 = 1;
+        }
+        else SysLog(L"sd: CMD8 r=%02x (v1/no-CMD8)", r8);
     }
 
     for (i = 0; i < 20000; i++)                                  // ACMD41 init loop
@@ -111,6 +124,7 @@ int SdInit(void)
         r = sd_cmd(ACMD41, v2 ? 0x40000000UL : 0);              // HCS bit for v2
         if (r == 0x00) break;
     }
+    SysLog(L"sd: ACMD41 r=%02x iters=%d v2=%d", r, i, v2);
     if (r != 0x00) { cs(0); return -4; }
 
     if (v2 && sd_cmd(CMD58, 0) == 0x00)                          // read OCR -> CCS (bit30)
@@ -118,13 +132,22 @@ int SdInit(void)
         for (i = 0; i < 4; i++) ocr[i] = rb();
         g_byteAddr = (ocr[0] & 0x40) ? 0 : 1;                   // CCS=1 -> block addressing
     }
+    SysLog(L"sd: CMD58 byteAddr=%d (1=SDSC 0=SDHC)", g_byteAddr);
     if (g_byteAddr) sd_cmd(CMD16, 512);                         // fix block length for SDSC
 
     sd_read_csd();
 
     cs(0); rb();
+    SpiSetSettle(SD_RUN_SETTLE);                     // card is up: switch to fast clock for block I/O
     g_inited = 1;
     SysLog(L"sd: init OK sectors=%u byteAddr=%d", g_sectors, g_byteAddr);
+    {   // publish capacity to the boot screen (dcwboot reads DCBOOT)
+        unsigned long mb = g_sectors / 2048;                       // 512-byte sectors -> MiB
+        WCHAR s[DCB_RESLEN];
+        if (mb >= 1024) wsprintfW(s, L"%u.%u GB", mb / 1024, ((mb % 1024) * 10) / 1024);
+        else            wsprintfW(s, L"%u MB", mb);
+        DcBootSet(DCB_STORE, DCB_OK, s);
+    }
     return 0;
 }
 
@@ -134,21 +157,24 @@ int SdReadSectors(unsigned long lba, int count, void *buf)
     unsigned long addr;
     int i;
 
-    if (!g_inited) return -1;
+    if (!g_inited) { SysLog(L"sd: read lba=%u but !inited", lba); return -1; }
     addr = g_byteAddr ? lba * 512 : lba;
+    SysLog(L"sd: read lba=%u cnt=%d addr=%u", lba, count, addr);
     cs(1);
     while (count-- > 0)
     {
-        unsigned char t = 0xFF;
-        if (sd_cmd(CMD17, addr) != 0) { cs(0); return -1; }
+        unsigned char t = 0xFF, r1;
+        r1 = sd_cmd(CMD17, addr);
+        if (r1 != 0) { SysLog(L"sd: CMD17 lba=%u R1=%02x", lba, r1); cs(0); return -1; }
         for (i = 0; i < 100000; i++) { t = rb(); if (t != 0xFF) break; }
-        if (t != 0xFE) { cs(0); return -1; }                    // data start token
+        if (t != 0xFE) { SysLog(L"sd: CMD17 lba=%u tok=%02x", lba, t); cs(0); return -1; }
         SpiRwData(BUS, 0, p, 512);                              // read 512 (tx NULL -> 0xFF)
         rb(); rb();                                             // data CRC16
         p += 512;
         addr += g_byteAddr ? 512 : 1;
     }
     cs(0); rb();
+    SysLog(L"sd: read ok lba=%u [%02x %02x %02x %02x]", lba, ((BYTE*)buf)[0], ((BYTE*)buf)[1], ((BYTE*)buf)[2], ((BYTE*)buf)[510]);
     return 0;
 }
 

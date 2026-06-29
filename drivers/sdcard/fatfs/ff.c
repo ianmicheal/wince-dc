@@ -2274,7 +2274,7 @@ FRESULT find_volume (	/* FR_OK(0): successful, !=0: any error occurred */
 
 	fs->fs_type = 0;					/* Clear the file system object */
 	fs->drv = LD2PD(vol);				/* Bind the logical drive and a physical drive */
-	stat = disk_status(fs->drv); //disk_initialize(fs->drv);	/* Initialize the physical drive */
+	stat = disk_initialize(fs->drv);	/* Initialize the physical drive (DreamShell had stubbed this to disk_status; we DO init here) */
 	if (stat & STA_NOINIT)				/* Check if the initialization succeeded */
 		return FR_NOT_READY;			/* Failed to initialize due to no medium or hard error */
 	if (!_FS_READONLY && wmode && (stat & STA_PROTECT))	/* Check disk write protection if needed */
