@@ -45,9 +45,27 @@ extern int W5500Tx(const unsigned char *frame, int len);
 extern int W5500RxPoll(unsigned char *buf, int max);
 static LinkOps s_w5500 = { "W5500", W5500Probe, W5500Init, W5500Tx, W5500RxPoll };
 
-// Modem backend - if a real modem is present, chain to PPP. TODO: detect + PPP.
-static int ModemProbe(void) { return 0; }       // stub: prefer ethernet for now
-static LinkOps s_modem = { "MODEM", ModemProbe, 0, 0, 0 };
+// Modem backend: rather than re-implement PPP, DELEGATE to the original SDK dial-up driver
+// (mpppdial.dll = the stock mppp.dll, vendored under a non-recursive name). When no ethernet
+// adapter is present we LoadLibrary it and forward InterfaceInitialize + the 13 AfdRas* exports;
+// it does the whole serial(COM6)+AT-dial+LCP/PAP-CHAP/IPCP+HDLC path (config from HKLM\Modem\
+// Sega-DreamcastBuiltIn). g_useDial/g_dialRas are read by ras.c to forward the RAS exports too.
+int     g_useDial = 0;                           // 1 = modem path: forward everything to mpppdial
+FARPROC g_dialRas[14];                            // [1..13] = original AfdRas* by ordinal
+static int (*g_dialIfInit)(unsigned short *, ifnet **);
+
+static int LoadDialDriver(void)
+{
+    HINSTANCE h;
+    int i;
+    h = LoadLibraryW(L"mpppdial.dll");
+    if (!h) { SysLog(L"netif: mpppdial.dll load FAILED"); return 0; }
+    g_dialIfInit = (int (*)(unsigned short *, ifnet **))GetProcAddress(h, (LPCWSTR)15);  // InterfaceInitialize
+    for (i = 1; i <= 13; i++) g_dialRas[i] = (FARPROC)GetProcAddress(h, (LPCWSTR)(DWORD)i);
+    if (!g_dialIfInit) { SysLog(L"netif: mpppdial InterfaceInitialize missing"); return 0; }
+    SysLog(L"netif: no ethernet -> delegating modem/PPP to original mpppdial.dll");
+    return 1;
+}
 
 // Null backend - no NIC present. A no-op link so microstk STILL gets a valid ifnet and
 // initialises (the stack comes up with just loopback); without it InterfaceInitialize
@@ -601,6 +619,7 @@ int InterfaceInitialize(unsigned short *name, ifnet **ppIf)
     ifnet *ifn;
     int    i;
 
+    if (g_useDial) return g_dialIfInit(name, ppIf);   // modem mode: every call -> original driver
     if (!g_hwUp)                                 // first call: detect + bring up hardware
     {
         SysLog(L"netif: InterfaceInitialize");
@@ -611,9 +630,13 @@ int InterfaceInitialize(unsigned short *name, ifnet **ppIf)
         {
             SysLog(L"netif: W5500 absent, probing BBA");
             if (s_bba.probe())        s_link = &s_bba;     // 2nd: Broadband Adapter (RTL8139)
-            else if (s_modem.probe()) s_link = &s_modem;   // 3rd: dial-up modem (PPP)
+            else if (LoadDialDriver()) g_useDial = 1;      // 3rd: dial-up modem -> original PPP driver
             else { s_link = &s_null; SysLog(L"netif: no adapter, loopback only"); }
         }
+        g_hwUp = 1;
+        // Modem path: the original mpppdial.dll owns the whole link (its own ifnet + PPP). Hand
+        // every InterfaceInitialize call straight to it; our ethernet setup below is skipped.
+        if (g_useDial) return g_dialIfInit(name, ppIf);
         SysLog(L"netif: link chosen, bringing up");
         // Backend probed PRESENT but bring-up failed. This is the real-HW killer: on silicon
         // BbaInit/W5500Init can fail in ways an idealized model never does (GAPS EEPROM handshake, reset

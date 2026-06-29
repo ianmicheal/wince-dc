@@ -29,6 +29,9 @@ ENDIF
 IF IMGMICROSTK
    sh4ser.dll      $(_FLATRELEASEDIR)$(RELEASEDIR_OS)sh4ser.dll      NK  SH
    seg_rock.dll    $(_FLATRELEASEDIR)$(RELEASEDIR_OS)seg_rock.dll    NK  SH
+   ; original SDK dial-up PPP driver, vendored under a non-recursive name. Our mppp.dll shim
+   ; LoadLibrary's it for the modem path (no ethernet) and forwards InterfaceInitialize + AfdRas*.
+   mpppdial.dll    $(_FLATRELEASEDIR)$(RELEASEDIR_OS)mpppdial.dll    NK  SH
 ENDIF
 
    wdmlib.dll      $(_FLATRELEASEDIR)$(RELEASEDIR_OS)wdmlib.dll      NK  SH

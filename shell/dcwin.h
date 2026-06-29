@@ -13,7 +13,7 @@
 #define DCWIN_SECTION  L"DCWIN"
 #define DCWIN_MAGIC    0x44435731   // 'DCW1'
 #define DCWIN_MAXWIN   4
-#define DCWIN_MAXCMD   48
+#define DCWIN_MAXCMD   192   // per-window draw-command budget (rich UIs: on-screen keyboards etc.)
 #define DCWIN_MAXIN    16
 
 #define DCOP_NONE  0

@@ -119,7 +119,7 @@ foreach(app dcwcalc dcwclock dcwexp dcwtask dcwmem)
 endforeach()
 add_sh_module(dcwnet TYPE exe ENTRY WinMainCRTStartup OUT dcwnet.exe
   SOURCES ${REPO}/shell/dcwnet.c ${REPO}/shell/dcwlib.c
-  LIBS coredll.lib corelibc.lib winsock.lib)
+  LIBS coredll.lib corelibc.lib winsock.lib mras.lib)
 add_sh_module(dcwlog TYPE exe ENTRY WinMainCRTStartup OUT dcwlog.exe   # the System Log viewer
   SOURCES ${REPO}/shell/dcwlog.c ${REPO}/shell/dcwlib.c ${REPO}/shell/syslog.c
   LIBS coredll.lib corelibc.lib)

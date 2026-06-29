@@ -13,6 +13,26 @@
 // netif.c: re-apply DnsServers (picks up the user's Primary/Secondary DNS from this entry).
 extern void NetifApplyDns(void);
 
+// Modem delegation (set in netif.c when no ethernet is found): forward every RAS export to the
+// original dial-up driver (mpppdial.dll) by ordinal, so real modem dialing/phonebook works. On
+// the ethernet path g_useDial is 0 and the instant-connect stubs below run instead.
+extern int     g_useDial;
+extern FARPROC g_dialRas[14];
+// One typedef per AfdRas* signature, so each export can forward to g_dialRas[ordinal].
+typedef DWORD (*FnDial)(void *, const WCHAR *, void *, DWORD, void *, HRASCONN *);
+typedef DWORD (*FnHangUp)(HRASCONN);
+typedef DWORD (*FnEnumConn)(void *, DWORD *, DWORD *);
+typedef DWORD (*FnConnStat)(HRASCONN, RASCONNSTATUS *);
+typedef DWORD (*FnEnumEnt)(void *, void *, RASENTRYNAME *, DWORD *, DWORD *);
+typedef DWORD (*FnGetDial)(void *, RASDIALPARAMS *, BOOL *);
+typedef DWORD (*FnSetDial)(void *, RASDIALPARAMS *, BOOL);
+typedef DWORD (*FnSetProp)(void *, const WCHAR *, void *, DWORD, void *, DWORD);
+typedef DWORD (*FnGetProp)(void *, const WCHAR *, void *, DWORD *, void *, DWORD *);
+typedef DWORD (*FnValidate)(void *, const WCHAR *);
+typedef DWORD (*FnDelete)(void *, const WCHAR *);
+typedef DWORD (*FnRename)(void *, const WCHAR *, const WCHAR *);
+typedef DWORD (*FnIoctl)(HRASCONN, DWORD, void *, DWORD, void *, DWORD *);
+
 // Ordinal 14: PPP FCS-16 table. Unused on the ethernet path; exported (DATA) as a
 // zeroed table so any importer resolves.
 WORD FCSTable[256];
@@ -26,6 +46,16 @@ static int g_dialed = 0;
 DWORD AfdRasDial(void *ext, const WCHAR *phonebook, void *params,
                  DWORD notifierType, void *notifier, HRASCONN *phConn)
 {
+    if (g_useDial && g_dialRas[2])
+    {
+        // Modem: the original driver dials + runs PPP. The DC-era IPCP doesn't carry DNS (it
+        // came from the system-flash ISP config), and our InterfaceInitialize is delegated so
+        // NetifOnLease/WriteDnsServers never ran - so write a resolver here (RAS-entry DNS ->
+        // flashrom -> public fallback) into HKLM\Comm so gethostbyname works over the PPP link.
+        DWORD rc = ((FnDial)g_dialRas[2])(ext, phonebook, params, notifierType, notifier, phConn);
+        NetifApplyDns();
+        return rc;
+    }
     (void)ext; (void)phonebook; (void)params;
     g_dialed = 1;
     NetifApplyDns();                                      // honor the entry's Primary/Secondary DNS
@@ -37,15 +67,17 @@ DWORD AfdRasDial(void *ext, const WCHAR *phonebook, void *params,
 
 // No modem to hang up - we keep the ethernet link up - but clear the RAS state so the
 // title sees a clean disconnect (and re-dials cleanly next time).
-DWORD AfdRasHangUp(HRASCONN h) { (void)h; g_dialed = 0; return 0; }
+DWORD AfdRasHangUp(HRASCONN h) { if (g_useDial && g_dialRas[8]) return ((FnHangUp)g_dialRas[8])(h); (void)h; g_dialed = 0; return 0; }
 
 // IsConnect() path: report the live connection if dialed (so the app reuses it), else
 // none (so it dials, which then "connects" via AfdRasDial).
 DWORD AfdRasEnumConnections(void *conns, DWORD *cb, DWORD *count)
-{ (void)conns; (void)cb; if (count) *count = g_dialed ? 1 : 0; return 0; }
+{ if (g_useDial && g_dialRas[3]) return ((FnEnumConn)g_dialRas[3])(conns, cb, count);
+  (void)conns; (void)cb; if (count) *count = g_dialed ? 1 : 0; return 0; }
 
 DWORD AfdRasGetConnectStatus(HRASCONN h, RASCONNSTATUS *st)
-{ (void)h; if (st) { st->rasconnstate = g_dialed ? RASCS_Connected : RASCS_Disconnected; st->dwError = 0; } return 0; }
+{ if (g_useDial && g_dialRas[5]) return ((FnConnStat)g_dialRas[5])(h, st);
+  (void)h; if (st) { st->rasconnstate = g_dialed ? RASCS_Connected : RASCS_Disconnected; st->dwError = 0; } return 0; }
 
 // ---- RAS phonebook: registry-backed (HKLM\Comm\RasBook\<entry>), matching the stock
 // mppp.dll (rasreg.c, reversed in Ghidra). The original stores dial params as values
@@ -96,6 +128,7 @@ DWORD AfdRasEnumEntries(void *a, void *b, RASENTRYNAME *entries, DWORD *cb, DWOR
 {
     HKEY  h;
     DWORD i = 0, got = 0;
+    if (g_useDial && g_dialRas[4]) return ((FnEnumEnt)g_dialRas[4])(a, b, entries, cb, count);
     (void)a; (void)b;
     if (count) *count = 0;
     EnsureDefaultEntry();
@@ -121,6 +154,7 @@ DWORD AfdRasEnumEntries(void *a, void *b, RASENTRYNAME *entries, DWORD *cb, DWOR
 DWORD AfdRasGetEntryDialParams(void *reserved, RASDIALPARAMS *p, BOOL *pw)
 {
     HKEY h;
+    if (g_useDial && g_dialRas[6]) return ((FnGetDial)g_dialRas[6])(reserved, p, pw);
     (void)reserved;
     if (pw) *pw = FALSE;
     if (!p) return ERROR_INVALID_PARAMETER;
@@ -139,6 +173,7 @@ DWORD AfdRasGetEntryDialParams(void *reserved, RASDIALPARAMS *p, BOOL *pw)
 DWORD AfdRasSetEntryDialParams(void *reserved, RASDIALPARAMS *p, BOOL del)
 {
     HKEY h;
+    if (g_useDial && g_dialRas[11]) return ((FnSetDial)g_dialRas[11])(reserved, p, del);
     (void)reserved; (void)del;
     if (!p) return ERROR_INVALID_PARAMETER;
     if (OpenEntry(p->szEntryName, TRUE, &h) != ERROR_SUCCESS) return ERROR_ACCESS_DENIED;
@@ -152,6 +187,7 @@ DWORD AfdRasSetEntryDialParams(void *reserved, RASDIALPARAMS *p, BOOL del)
 DWORD AfdRasSetEntryProperties(void *reserved, const WCHAR *e, void *props, DWORD cb, void *dev, DWORD dcb)
 {
     HKEY h;
+    if (g_useDial && g_dialRas[12]) return ((FnSetProp)g_dialRas[12])(reserved, e, props, cb, dev, dcb);
     (void)reserved; (void)dev; (void)dcb;
     if (OpenEntry(e, TRUE, &h) != ERROR_SUCCESS) return ERROR_ACCESS_DENIED;
     if (props && cb) RegSetValueExW(h, L"Entry", 0, REG_BINARY, (const BYTE *)props, cb);
@@ -162,6 +198,7 @@ DWORD AfdRasSetEntryProperties(void *reserved, const WCHAR *e, void *props, DWOR
 DWORD AfdRasGetEntryProperties(void *reserved, const WCHAR *e, void *props, DWORD *cb, void *dev, DWORD *dcb)
 {
     HKEY  h; DWORD t;
+    if (g_useDial && g_dialRas[7]) return ((FnGetProp)g_dialRas[7])(reserved, e, props, cb, dev, dcb);
     (void)reserved; (void)dev;
     if (dcb) *dcb = 0;
     if (OpenEntry(e, FALSE, &h) != ERROR_SUCCESS) { if (cb) *cb = 0; return 0; }
@@ -173,6 +210,7 @@ DWORD AfdRasGetEntryProperties(void *reserved, const WCHAR *e, void *props, DWOR
 DWORD AfdRasValidateEntryName(void *reserved, const WCHAR *e)
 {
     HKEY h;
+    if (g_useDial && g_dialRas[13]) return ((FnValidate)g_dialRas[13])(reserved, e);
     (void)reserved;
     if (OpenEntry(e, FALSE, &h) == ERROR_SUCCESS) { RegCloseKey(h); return 183; } // ERROR_ALREADY_EXISTS
     return 0;
@@ -181,12 +219,15 @@ DWORD AfdRasValidateEntryName(void *reserved, const WCHAR *e)
 DWORD AfdRasDeleteEntry(void *reserved, const WCHAR *e)
 {
     WCHAR path[96];
+    if (g_useDial && g_dialRas[1]) return ((FnDelete)g_dialRas[1])(reserved, e);
     (void)reserved;
     lstrcpyW(path, RASBOOK); lstrcatW(path, L"\\"); lstrcatW(path, e ? e : L"");
     RegDeleteKeyW(HKEY_LOCAL_MACHINE, path);
     return 0;
 }
 
-DWORD AfdRasRenameEntry(void *reserved, const WCHAR *o, const WCHAR *n) { (void)reserved; (void)o; (void)n; return 0; }
+DWORD AfdRasRenameEntry(void *reserved, const WCHAR *o, const WCHAR *n)
+{ if (g_useDial && g_dialRas[10]) return ((FnRename)g_dialRas[10])(reserved, o, n); (void)reserved; (void)o; (void)n; return 0; }
 DWORD AfdRasIOControl(HRASCONN h, DWORD code, void *in, DWORD inl, void *out, DWORD *outl)
-{ (void)h; (void)code; (void)in; (void)inl; (void)out; (void)outl; return 0; }
+{ if (g_useDial && g_dialRas[9]) return ((FnIoctl)g_dialRas[9])(h, code, in, inl, out, outl);
+  (void)h; (void)code; (void)in; (void)inl; (void)out; (void)outl; return 0; }
