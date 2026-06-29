@@ -124,6 +124,11 @@ add_sh_module(dcwlog TYPE exe ENTRY WinMainCRTStartup OUT dcwlog.exe   # the Sys
   SOURCES ${REPO}/shell/dcwlog.c ${REPO}/shell/dcwlib.c ${REPO}/shell/syslog.c
   LIBS coredll.lib corelibc.lib)
 
+# ---- boot screen (autorun): D3D logo + live checklist, then launches dcshell -------
+add_sh_module(dcwboot TYPE exe ENTRY WinMainCRTStartup OUT dcwboot.exe
+  SOURCES ${REPO}/shell/dcwboot.c ${REPO}/shell/dcgfx.c ${REPO}/shell/dcboot.c
+  LIBS coredll.lib corelibc.lib ddraw.lib d3dim.lib dxguid.lib winsock.lib)
+
 # ====================================================================================
 # Bootable image pipeline (opt-in: `cmake --build build --target gdi`).
 #   modules -> deploy into image/OS -> makeimg -> NK.bin -> wrap -> 0winceos.bin -> disc
@@ -144,7 +149,7 @@ add_sh_module(dcwlog TYPE exe ENTRY WinMainCRTStartup OUT dcwlog.exe   # the Sys
 # the checked DLLs are opt-in (they assert/break some titles, e.g. DDHAL under DirectDraw).
 set(KERNEL  "retail"       CACHE STRING "image kernel: retail (silent nknodbg) or debug (SCIF-console nkscifkd)")
 set(DLLS    "retail"       CACHE STRING "system DLLs: retail (stock) or debug (checked overlay)")
-set(AUTORUN "dcshell.exe"  CACHE STRING "program baked into the image's HKLM\\init Autorun value")
+set(AUTORUN "dcwboot.exe"  CACHE STRING "program baked into the image's HKLM\\init Autorun value")
 set_property(CACHE KERNEL PROPERTY STRINGS retail debug)
 set_property(CACHE DLLS   PROPERTY STRINGS retail debug)
 
