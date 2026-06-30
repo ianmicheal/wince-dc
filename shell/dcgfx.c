@@ -1176,15 +1176,36 @@ void GfxBlitPage(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh)
 	         (float)sw / PAGE_TW, (float)sh / PAGE_TH, 0xFFFFFFFF, 2);
 }
 
-void GfxLaunch(const WCHAR *path)
+int GfxLaunch(const WCHAR *path, GFXPOLLFN pfnPoll)
 {
 	PROCESS_INFORMATION pi;
+	int nKill = 0;
 
 	DestroyD3D();
 	DestroySurfaces();
 	if (CreateProcessW(path, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi))
 	{
-		WaitForSingleObject(pi.hProcess, INFINITE);
+		if (pfnPoll)
+		{
+			// Cooperative app (e.g. our browser): the shell kept its keyboard + controller
+			// acquired, so poll the panic combos every 30 ms (ALT+F4 / START+A kill;
+			// CTRL+ALT+DEL kills + opens the task manager). Nonzero return -> TerminateProcess.
+			while (WaitForSingleObject(pi.hProcess, 30) == WAIT_TIMEOUT)
+			{
+				if ((nKill = pfnPoll()) != 0)
+				{
+					TerminateProcess(pi.hProcess, 0);
+					WaitForSingleObject(pi.hProcess, 3000); // let it unwind / drop the display
+					break;
+				}
+			}
+		}
+		else
+		{
+			// Retail game (exclusive Maple/DInput + raw Maple DMA): the shell dropped ALL
+			// input and must NOT touch the bus, or the game faults to the BIOS. Just wait.
+			WaitForSingleObject(pi.hProcess, INFINITE);
+		}
 		CloseHandle(pi.hThread);
 		CloseHandle(pi.hProcess);
 	}
@@ -1193,4 +1214,5 @@ void GfxLaunch(const WCHAR *path)
 		InitD3D();
 		BuildAtlas();
 	}
+	return nKill;
 }

@@ -18,11 +18,23 @@ extern "C"
 	void DInShutdown(void);
 	void DInUpdate(void); // poll all devices; call once per loop
 
-	void DInRelease(void);   // hand input to a launched full-screen app (drop our acquire)
-	void DInReacquire(void); // app exited: take input back (re-primed, no phantom edge)
+	void DInRelease(void);      // hand ALL input to a launched full-screen app (drop our acquire)
+	void DInHandoffToApp(void); // hand off but KEEP keyboard+controller (so we can poll hotkeys)
+	void DInReacquire(void);    // app exited: take input back (re-primed, no phantom edge)
 
 	int DInNextKey(DWORD *vk); // 1 + VK for each queued key-down (edge / auto-repeat)
-	int DInHasPointer(void);   // TRUE if a mouse or controller pointer is active
+
+	// Global shell hotkeys. ALT / CTRL and F4 are NOT in the VK translation table (g_map),
+	// so DInHotkey reads them straight off the keyboard device's raw key array. It returns
+	// the combo currently HELD (the caller edge-detects); used for ALT+F4 (close the focused
+	// app) and CTRL+ALT+DEL (open the task manager).
+#define DIN_HK_NONE       0
+#define DIN_HK_ALTF4      1
+#define DIN_HK_CTRLALTDEL 2
+	int DInHotkey(void); // currently-held global keyboard hotkey (DIN_HK_*), DIN_HK_NONE if none
+	int DInPadCombo(
+	    void); // 1 while the controller panic combo (START+A) is held; keyboard-less kill
+	int DInHasPointer(void); // TRUE if a mouse or controller pointer is active
 	void DInCursor(int *x, int *y);
 	int DInTookClick(void);    // TRUE once per mouse click (cursor paradigm)
 	int DInTookActivate(void); // TRUE once per controller face-button press (-> Enter)

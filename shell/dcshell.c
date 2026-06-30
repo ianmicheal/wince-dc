@@ -309,6 +309,35 @@ static BOOL IsDcwApp(const WCHAR *pszPath)
 	return (pszBase[0] | 32) == 'd' && (pszBase[1] | 32) == 'c' && (pszBase[2] | 32) == 'w';
 }
 
+// Panic-combo poll for a fullscreen app (passed to GfxLaunch, called ~30ms while it runs).
+// The shell kept its keyboard + controller acquired across the hand-off, so we read them
+// directly. Keyboard ALT+F4 and the controller's START+A both kill; CTRL+ALT+DEL kills and
+// returns a distinct code so ShellLaunch can pop the task manager afterwards.
+static int ShellFullscreenPoll(void)
+{
+	int nHk = DInHotkey();
+	if (nHk != DIN_HK_NONE)
+		return nHk;
+	if (DInPadCombo())
+		return DIN_HK_ALTF4; // START+A -> kill (controller analogue of ALT+F4)
+	return DIN_HK_NONE;
+}
+
+// Can the shell safely watch input while THIS fullscreen app runs? Only our own CE apps use
+// cooperative (CE-driver-mediated, non-exclusive) DirectInput, so the shell can keep its
+// keyboard + controller acquired and poll the panic combos. A retail game (e.g. 4x4 Evo)
+// takes the Maple bus / DirectInput EXCLUSIVELY and drives raw Maple DMA itself - if the shell
+// so much as reads the bus while it runs, the game faults to the BIOS. For those we drop ALL
+// input and never touch the bus (no shell-side kill; the game owns its own exit).
+static int IsPollSafeFullscreen(const WCHAR *pszExe)
+{
+	const WCHAR *pszBase = pszExe, *p;
+	for (p = pszExe; *p; p++)
+		if (*p == L'\\' || *p == L'/')
+			pszBase = p + 1;
+	return lstrcmpiW(pszBase, L"iexplore.exe") == 0;
+}
+
 static void ShellLaunch(const WCHAR *pszCmd)
 {
 	WCHAR szExe[MAX_PATH];
@@ -321,12 +350,27 @@ static void ShellLaunch(const WCHAR *pszCmd)
 		pszArgs = pszCmd + i + 1; // e.g. "dcwplay.exe \CD-ROM\song.mp3"
 	if (IsDcwApp(szExe))
 		LaunchApp(szExe, pszArgs); // windowed, composited (+ optional file argument)
+	else if (IsPollSafeFullscreen(szExe))
+	{
+		// Cooperative fullscreen app: keep keyboard+controller so we can poll the panic combos.
+		int nKill;
+		DbgStr(L"DCSHELL: fullscreen launch (cooperative; panic combos armed)\r\n");
+		DInHandoffToApp();
+		nKill = GfxLaunch(szExe, ShellFullscreenPoll); // run (blocks; polls combos) -> reclaim
+		DInReacquire();                                // app exited / killed -> take input back
+		if (nKill == DIN_HK_CTRLALTDEL)
+			LaunchApp(L"dcwtask.exe", NULL); // CTRL+ALT+DEL -> task manager on the desktop
+		s_bDirty = 1;
+		s_bDeskDirty = 1;
+	}
 	else
 	{
-		DbgStr(L"DCSHELL: fullscreen launch (display + input hand-off)\r\n");
-		DInRelease();     // hand input to the app (it may grab DI exclusively)
-		GfxLaunch(szExe); // release display -> run (blocks) -> reclaim
-		DInReacquire();   // app exited -> take input back
+		// Retail game: drop ALL input and do NOT touch the Maple bus while it runs, else it
+		// faults to the BIOS. No shell-side panic kill here - the game manages its own exit.
+		DbgStr(L"DCSHELL: fullscreen launch (exclusive game; full input hand-off)\r\n");
+		DInRelease();
+		GfxLaunch(szExe, NULL); // run (blocks, INFINITE wait) -> reclaim
+		DInReacquire();
 		s_bDirty = 1;
 		s_bDeskDirty = 1; // surfaces/icons rebuilt -> recache desktop
 	}
@@ -1217,6 +1261,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpszCmd, int nShow)
 			while (DInNextKey(&dwVk))
 				OnKey(dwVk);
 		}
+
+		// Global hotkeys for windowed apps (the shell loop is running, so we read input
+		// directly). Edge-detected: fire once per press, not every frame held. ALT+F4 or the
+		// controller's START+A close the focused window (same path as ESC / the X button);
+		// CTRL+ALT+DEL opens the task manager. (Fullscreen apps are handled inside GfxLaunch.)
+		{
+			static int s_nLastHk = DIN_HK_NONE;
+			int nHk = DInHotkey();
+			if (nHk == DIN_HK_NONE && DInPadCombo())
+				nHk = DIN_HK_ALTF4; // START+A closes the focused window too
+			if (nHk != DIN_HK_NONE && nHk != s_nLastHk)
+			{
+				if (nHk == DIN_HK_ALTF4)
+				{
+					if (s_nFocus >= 0 && s_pShared && s_pShared->win[s_nFocus].inUse)
+					{
+						s_pShared->win[s_nFocus].wantClose = 1;
+						s_bDirty = 1;
+					}
+				}
+				else if (nHk == DIN_HK_CTRLALTDEL)
+					LaunchApp(L"dcwtask.exe", NULL);
+			}
+			s_nLastHk = nHk;
+		}
+
 		bMoved = 0;
 		if (DInHasPointer())
 		{

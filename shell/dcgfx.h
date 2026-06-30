@@ -65,9 +65,14 @@ extern "C"
 	void GfxClearClip(void);
 
 	//
-	// Launch an app: hand the exclusive display off, wait for it, reclaim it.
+	// Launch an app: hand the exclusive display off, wait for it, reclaim it. The caller
+	// supplies pfnPoll, called repeatedly while the app runs (the shell keeps its keyboard +
+	// controller acquired and polls the panic combos there). pfnPoll returns 0 to keep
+	// waiting, or a nonzero reason code to kill the app (TerminateProcess). GfxLaunch returns
+	// 0 if the app exited on its own, else the reason code pfnPoll returned.
 	//
-	void GfxLaunch(const WCHAR *path);
+	typedef int (*GFXPOLLFN)(void);
+	int GfxLaunch(const WCHAR *path, GFXPOLLFN pfnPoll);
 
 	//
 	// Static desktop-layer cache. Paint the desktop once between Begin/End (into a

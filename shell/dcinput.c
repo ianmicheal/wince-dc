@@ -283,6 +283,18 @@ void DInRelease(void)
 	OutputDebugStringW(L"DCIN: released input to app\r\n");
 }
 
+// Hand off to a fullscreen app but KEEP the keyboard + controller acquired so the shell
+// can still poll the panic combos (ALT+F4 / CTRL+ALT+DEL / START+A) while the app runs.
+// Only the pointer (mouse) is released. DC games read the controller off the Maple bus
+// directly (not DirectInput), so our non-exclusive hold doesn't starve them; our own apps
+// (e.g. the browser) acquire non-exclusively too. DInReacquire restores the mouse.
+void DInHandoffToApp(void)
+{
+	if (g_pMouse)
+		IDirectInputDevice2_Unacquire(g_pMouse);
+	OutputDebugStringW(L"DCIN: handoff (kept keyboard+controller for hotkeys)\r\n");
+}
+
 // App exited: take input back. Re-prime edge detection + clear the key snapshot so a
 // key/button still held at hand-back doesn't fire a phantom press into the shell.
 void DInReacquire(void)
@@ -301,6 +313,56 @@ void DInReacquire(void)
 	memset(g_aBeEdge, 0, sizeof(g_aBeEdge));
 	memset(g_aBeHeld, 0, sizeof(g_aBeHeld));
 	OutputDebugStringW(L"DCIN: reacquired input\r\n");
+}
+
+//
+// Global hotkey state (ALT+F4, CTRL+ALT+DEL). The modifier keys and F4 are not in
+// the VK translation table, so read the raw 256-key array straight off the keyboard
+// device. Self-contained (own GetDeviceState) so a caller can poll it standalone,
+// not only from the per-frame DInUpdate path. Returns the combo currently held; the
+// caller is responsible for edge-detecting (fire once per press).
+//
+int DInHotkey(void)
+{
+	BYTE abKeys[256];
+	int bAlt, bCtrl;
+
+	if (!g_pKbd)
+		return DIN_HK_NONE;
+	if (IDirectInputDevice2_GetDeviceState(g_pKbd, 256, abKeys) != DI_OK)
+	{
+		IDirectInputDevice2_Acquire(
+		    g_pKbd); // lost (e.g. an app grabbed it) - reprime, skip this tick
+		return DIN_HK_NONE;
+	}
+	bAlt = (abKeys[DIK_LMENU] | abKeys[DIK_RMENU]) & 0x80;
+	bCtrl = (abKeys[DIK_LCONTROL] | abKeys[DIK_RCONTROL]) & 0x80;
+	if (bCtrl && bAlt && (abKeys[DIK_DELETE] & 0x80))
+		return DIN_HK_CTRLALTDEL;
+	if (bAlt && (abKeys[DIK_F4] & 0x80))
+		return DIN_HK_ALTF4;
+	return DIN_HK_NONE;
+}
+
+//
+// Controller panic combo: START + A. Self-contained joystick read (own Poll +
+// GetDeviceState) so it can be polled during a fullscreen hand-off, when the per-frame
+// DInUpdate loop isn't running. Returns 1 while both buttons are physically held; the
+// caller edge-detects. This is the keyboard-less analogue of ALT+F4 (kill the app).
+//
+int DInPadCombo(void)
+{
+	DIJOYSTATE js;
+
+	if (!g_pJoy)
+		return 0;
+	IDirectInputDevice2_Poll(g_pJoy);
+	if (IDirectInputDevice2_GetDeviceState(g_pJoy, sizeof(js), &js) != DI_OK)
+	{
+		IDirectInputDevice2_Acquire(g_pJoy); // lost - reprime, skip this tick
+		return 0;
+	}
+	return (JBTN(js, USG_START) && JBTN(js, USG_A)) ? 1 : 0;
 }
 
 void DInUpdate(void)
