@@ -208,7 +208,7 @@ static void Draw(DCWin *pWin)
 	DCWinEndFrame(pWin);
 }
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
+int DcwMain(HINSTANCE hInst, LPWSTR lpCmd)
 {
 	DCWin *pWin;
 	DWORD dwKey;

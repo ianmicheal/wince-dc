@@ -198,7 +198,7 @@ static void StartTest(void)
 	g_awchMsg[0] = 0;
 }
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
+int DcwMain(HINSTANCE hInst, LPWSTR lpCmd)
 {
 	DCWin *w;
 	DWORD dwKey;

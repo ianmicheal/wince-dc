@@ -65,12 +65,26 @@ typedef struct
 	DWORD ptrBtn;    // shell -> client: primary button (stick click / A) down = 1
 } DcWindow;
 
+// A faulting client fills this (via dcwlib's SEH wrapper) before it dies; the shell edge-detects
+// `seq` and raises a Win9x-style blue screen with the details. Appended at the END of DcShared so
+// existing field offsets are unchanged.
+typedef struct
+{
+	DWORD seq;      // bumped on each new crash (shell edge-detects)
+	DWORD code;     // exception code (e.g. 0xC0000005 = access violation)
+	DWORD addr;     // faulting instruction address
+	DWORD access;   // access violation: 0 = read, 1 = write; 0xFFFFFFFF = n/a
+	DWORD badAddr;  // address the faulting access touched (access violations only)
+	WCHAR proc[32]; // faulting process (exe basename)
+} DcCrash;
+
 typedef struct
 {
 	DWORD magic;
 	DWORD execSeq; // client bumps to ask the shell to launch execPath
 	WCHAR execPath[260];
 	DcWindow win[DCWIN_MAXWIN];
+	DcCrash crash; // last client crash report (see DcCrash)
 } DcShared;
 
 #endif // DCWIN_H

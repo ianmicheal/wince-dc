@@ -195,3 +195,65 @@ void DCWinClose(DCWin *pWin)
 	if (pWin->hMap)
 		CloseHandle(pWin->hMap);
 }
+
+// SEH filter: record an unhandled exception into the shared DcCrash so the shell can raise a blue
+// screen, then unwind (EXCEPTION_EXECUTE_HANDLER) so this process exits cleanly + gets reaped.
+static LONG DCWinCrashFilter(EXCEPTION_POINTERS *pep)
+{
+	DcShared *sh = g_win.sh;
+	HANDLE hm = NULL;
+	if (!sh) // crashed before DCWinOpen mapped the section - map a best-effort view
+	{
+		hm = CreateFileMappingW((HANDLE)-1, NULL, PAGE_READWRITE, 0, sizeof(DcShared),
+		                        DCWIN_SECTION);
+		if (hm)
+			sh = (DcShared *)MapViewOfFile(hm, FILE_MAP_WRITE, 0, 0, sizeof(DcShared));
+	}
+	OutputDebugStringW(L"DCWLIB: crash filter entered\r\n");
+	if (sh && pep && pep->ExceptionRecord)
+	{
+		EXCEPTION_RECORD *er = pep->ExceptionRecord;
+		WCHAR szPath[MAX_PATH], achDbg[80];
+		const WCHAR *pszBase = L"app", *p;
+		int i;
+		wsprintfW(achDbg, L"DCWLIB: exception %08X at %08X\r\n", (unsigned)er->ExceptionCode,
+		          (unsigned)er->ExceptionAddress);
+		OutputDebugStringW(achDbg);
+		sh->crash.code = er->ExceptionCode;
+		sh->crash.addr = (DWORD)er->ExceptionAddress;
+		sh->crash.access = 0xFFFFFFFF;
+		sh->crash.badAddr = 0;
+		if (er->ExceptionCode == STATUS_ACCESS_VIOLATION && er->NumberParameters >= 2)
+		{
+			sh->crash.access = er->ExceptionInformation[0]; // 0 = read, 1 = write
+			sh->crash.badAddr = (DWORD)er->ExceptionInformation[1];
+		}
+		if (GetModuleFileNameW(NULL, szPath, MAX_PATH))
+			for (p = pszBase = szPath; *p; p++)
+				if (*p == L'\\' || *p == L'/')
+					pszBase = p + 1;
+		for (i = 0; i < 31 && pszBase[i]; i++)
+			sh->crash.proc[i] = pszBase[i];
+		sh->crash.proc[i] = 0;
+		sh->crash.seq++; // signal LAST, after the fields are filled
+	}
+	return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// dcwlib owns WinMain; clients implement DcwMain. Wrapping the whole app in one __try is how we
+// catch faults (CE 2.12 has no SetUnhandledExceptionFilter, but SEH catches SH-4 hardware faults).
+int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
+{
+	int rc = 1;
+	(void)hPrev;
+	(void)nShow;
+	__try
+	{
+		rc = DcwMain(hInst, lpCmd);
+	}
+	__except (DCWinCrashFilter(GetExceptionInformation()))
+	{
+		rc = 1; // crash reported to the shell; exit so it can reap us + show the BSOD
+	}
+	return rc;
+}

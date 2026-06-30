@@ -9,7 +9,7 @@
 #define LH  300
 #define ROW 13
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
+int DcwMain(HINSTANCE hInst, LPWSTR lpCmd)
 {
 	DCWin *w;
 	SysLogShared *sl;

@@ -921,7 +921,7 @@ static void Draw(DCWin *w, int cw, int ch)
 		DCWinText(w, 10, y, g_aLog[i].c, C_BG, g_aLog[i].s);
 }
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
+int DcwMain(HINSTANCE hInst, LPWSTR lpCmd)
 {
 	DCWin *w;
 	WSADATA wsa;

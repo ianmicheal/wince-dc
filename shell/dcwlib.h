@@ -48,4 +48,9 @@ void DCWinFillBg(DCWin *win, COLORREF color);
 void DCWinExec(DCWin *win, const WCHAR *path); // ask the shell to launch an app
 void DCWinClose(DCWin *win);
 
+// Crash handling: dcwlib provides WinMain (it wraps your entry in SEH and reports any unhandled
+// exception to the shell, which raises a blue screen). Each client implements DcwMain INSTEAD of
+// WinMain - same hInstance + command line, no WinMain boilerplate.
+int DcwMain(HINSTANCE hInst, LPWSTR lpCmd);
+
 #endif // DCWLIB_H

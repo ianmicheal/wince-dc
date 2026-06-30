@@ -114,7 +114,7 @@ static void DrawClock(DCWin *pWin, SYSTEMTIME *pst)
 	DCWinEndFrame(pWin);
 }
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
+int DcwMain(HINSTANCE hInst, LPWSTR lpCmd)
 {
 	DCWin *pWin;
 	SYSTEMTIME st;

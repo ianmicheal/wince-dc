@@ -738,7 +738,7 @@ static void FmtTime(WCHAR *pszOut, DWORD dwFrames)
 	wsprintfW(pszOut, L"%u:%02u", dwS / 60, dwS % 60);
 }
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
+int DcwMain(HINSTANCE hInst, LPWSTR lpCmd)
 {
 	DCWin *pWin;
 	DWORD dwKey, dwLast = 0;
