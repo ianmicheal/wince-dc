@@ -46,12 +46,12 @@ static int g_nMemScan = 999; // incremental mem-walk cursor over visible rows (>
 static WCHAR g_awchStatus[44] = L"";
 
 // Right-click (VK_APPS from the shell) context menu.
-#define MENU_N  2
-#define MENU_W  104
+#define MENU_N  3
+#define MENU_W  108
 #define MENU_RH 16
 static int g_bMenu = 0; // context menu open
 static int g_nMenuX, g_nMenuY, g_nMenuSel;
-static const WCHAR *const s_aMenu[MENU_N] = {L"End Task", L"Refresh"};
+static const WCHAR *const s_aMenu[MENU_N] = {L"End Task", L"Refresh", L"Crash (test)"};
 
 static const WCHAR *Base(const WCHAR *psz)
 {
@@ -216,10 +216,39 @@ static void RamLine(WCHAR *pszOut)
 	}
 }
 
-int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
+// "crash" anywhere in the command line (case-insensitive). Robust against CE passing lpCmd as
+// "crash" OR "dcwtask.exe crash" OR with leading whitespace.
+static int HasCrashArg(const WCHAR *psz)
+{
+	int i;
+	if (!psz)
+		return 0;
+	for (i = 0; psz[i]; i++)
+		if ((psz[i] | 32) == 'c' && (psz[i + 1] | 32) == 'r' && (psz[i + 2] | 32) == 'a' &&
+		    (psz[i + 3] | 32) == 's' && (psz[i + 4] | 32) == 'h')
+			return 1;
+	return 0;
+}
+
+int DcwMain(HINSTANCE hInst, LPWSTR lpCmd)
 {
 	DCWin *w;
 	DWORD dwKey, dwNextScan;
+
+	{
+		WCHAR achDbg[96];
+		wsprintfW(achDbg, L"DCWTASK: lpCmd=[%s]\r\n", lpCmd ? lpCmd : L"(null)");
+		OutputDebugStringW(achDbg);
+	}
+	// "dcwtask.exe crash" (Start menu -> Crash Test) raises an unhandled exception so dcwlib's SEH
+	// wrapper reports it and the shell blue-screens. RaiseException is reliably caught (a wild
+	// pointer may not fault on every CE config); the 2 args fake a realistic access violation.
+	if (HasCrashArg(lpCmd))
+	{
+		DWORD a[2] = {1 /* write */, 0xBADC0DE};
+		OutputDebugStringW(L"DCWTASK: raising crash exception\r\n");
+		RaiseException(STATUS_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 2, a);
+	}
 
 	w = DCWinOpen(150, 70, CW, CH, L"Task Manager", ICON_APP);
 	if (!w)
@@ -288,6 +317,11 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 					g_bMenu = 0;
 					if (!bOff && g_nMenuSel == 0)
 						EndTask();
+					else if (!bOff && g_nMenuSel == 2) // exercises the shell's BSOD
+					{
+						DWORD a[2] = {1, 0xBADC0DE};
+						RaiseException(STATUS_ACCESS_VIOLATION, EXCEPTION_NONCONTINUABLE, 2, a);
+					}
 					Scan();
 				}
 				nChanged = 1;

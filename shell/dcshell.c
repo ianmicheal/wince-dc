@@ -57,8 +57,11 @@ static int s_anDeskUser[MAXDESK]; // for user-added: the s_start[] index it came
 static int s_cDesk = 0;
 
 static const SHORTCUT s_start[] = {
-    {L"My Dreamcast", L"\\", NULL, ICON_SWIRL}, {L"Windows", L"\\Windows", NULL, ICON_FOLDER},
-    {L"CD-ROM", L"\\CD-ROM", NULL, ICON_DRIVE}, {L"Task Manager", NULL, L"dcwtask.exe", ICON_APP},
+    {L"My Dreamcast", L"\\", NULL, ICON_SWIRL},
+    {L"Windows", L"\\Windows", NULL, ICON_FOLDER},
+    {L"CD-ROM", L"\\CD-ROM", NULL, ICON_DRIVE},
+    {L"Task Manager", NULL, L"dcwtask.exe", ICON_APP},
+    {L"Crash Test", NULL, L"dcwtask.exe crash", ICON_APP},
     {L"Shut Down...", NULL, NULL, ICON_FILE},
 };
 #define START_N (sizeof(s_start) / sizeof(s_start[0]))
@@ -104,6 +107,10 @@ static HWND s_hwnd = NULL;
 static BOOL s_bDiKbd = FALSE;  // DI keyboard acquired (else fall back to WM_KEYDOWN)
 static int s_bWmMouseSeen = 0; // logged once when GWES mouse messages arrive
 static int s_nCx = SCREEN_W / 2, s_nCy = SCREEN_H / 2; // pointer position
+static int s_bBsod = 0;        // a client crashed -> blue-screen overlay is up
+static DcCrash s_crash;        // the crash being shown
+static DWORD s_dwCrashSeq = 0; // last DcShared.crash.seq we raised a BSOD for
+static DWORD s_dwBsodAt = 0;   // tick the BSOD was raised (arm delay before it can be dismissed)
 
 // Desktop icon cell positions (top-left of the 96x54 clickable cell). Mutable so icons can
 // be dragged. Built-ins are laid out in a column-major grid by DeskPosInit() (flow top-to-
@@ -284,6 +291,45 @@ static void DbgStr(const WCHAR *psz)
 	OutputDebugStringW(psz);
 }
 
+// Raise the blue screen for the crash already filled into s_crash. Arms a short delay and drops
+// the input that caused the launch/crash so it can't dismiss the screen the same instant.
+static void RaiseBsod(void)
+{
+	DWORD dwVk;
+	s_bBsod = 1;
+	s_bDirty = 1;
+	s_dwBsodAt = GetTickCount();
+	DbgStr(L"DCSHELL: BSOD raised\r\n");
+	while (DInNextKey(&dwVk))
+		;
+	DInTookActivate();
+	DInTookContext();
+	DInTookClick();
+}
+
+// A fullscreen app (no dcwlib SEH wrapper) exited. We can only blue-screen it if the exit code is
+// a real NTSTATUS fault. CONFIRMED on hardware: CE 2.12 reports a plain exit code 1 for an SH-4
+// fault (the kernel logs the real exception to the debug port, but GetExitCodeProcess just sees
+// 1), so we CANNOT tell a third-party game crash from a normal exit - those go uncaught here. This
+// only fires if some app actually exits with a 0xCxxxxxxx status; normal exits never do.
+static void CheckFullscreenCrash(const WCHAR *pszExe, DWORD dwExit)
+{
+	const WCHAR *pszBase = pszExe, *p;
+	int i;
+	if ((dwExit & 0xF0000000u) != 0xC0000000u)
+		return; // plain exit code (incl. CE's "1" for a fault) -> can't distinguish a crash
+	for (p = pszExe; *p; p++)
+		if (*p == L'\\' || *p == L'/')
+			pszBase = p + 1;
+	memset(&s_crash, 0, sizeof(s_crash));
+	s_crash.code = dwExit;
+	s_crash.access = 0xFFFFFFFF; // no SEH record for a fullscreen app -> no r/w address
+	for (i = 0; i < 31 && pszBase[i]; i++)
+		s_crash.proc[i] = pszBase[i];
+	s_crash.proc[i] = 0;
+	RaiseBsod();
+}
+
 //
 // Compositor shared section + launching
 //
@@ -386,6 +432,7 @@ static void ShellLaunch(const WCHAR *pszCmd)
 		DInReacquire();                                // app exited / killed -> take input back
 		if (nKill == DIN_HK_CTRLALTDEL)
 			LaunchApp(L"dcwtask.exe", NULL); // CTRL+ALT+DEL -> task manager on the desktop
+		CheckFullscreenCrash(szExe, GfxLastExitCode());
 		s_bDirty = 1;
 		s_bDeskDirty = 1;
 	}
@@ -397,6 +444,7 @@ static void ShellLaunch(const WCHAR *pszCmd)
 		DInRelease();
 		GfxLaunch(szExe, NULL); // run (blocks, INFINITE wait) -> reclaim
 		DInReacquire();
+		CheckFullscreenCrash(szExe, GfxLastExitCode());
 		s_bDirty = 1;
 		s_bDeskDirty = 1; // surfaces/icons rebuilt -> recache desktop
 	}
@@ -1256,10 +1304,76 @@ static void RebuildDesktopCache(void)
 // Rebuild the scene: a PVR2 quad list, back-to-front (desktop -> windows -> taskbar)
 // = submit order = painter's Z. The desktop layer is a cached vertex sub-list,
 // rebuilt only when its inputs (selection / menu) change. GfxPresent consumes it.
+static const WCHAR *ExcDesc(DWORD dwCode)
+{
+	switch (dwCode)
+	{
+		case 0xC0000005:
+			return L"access violation";
+		case 0xC000001D:
+			return L"illegal instruction";
+		case 0x80000002:
+			return L"datatype misalignment";
+		case 0x80000003:
+			return L"breakpoint";
+		case 0xC0000094:
+			return L"integer divide by zero";
+		case 0xC0000096:
+			return L"privileged instruction";
+		case 0xC00000FD:
+			return L"stack overflow";
+		default:
+			return L"unhandled exception";
+	}
+}
+
+// Windows-9x-style blue screen: a client process faulted. Drawn instead of the desktop until
+// dismissed. Fills must precede GfxLockDC (same rule as every other layer).
+#define BSOD_BLUE RGB(0, 0, 168)
+static void RenderBsod(void)
+{
+	HDC hdc;
+	WCHAR sz[96];
+	int nMidX = SCREEN_W / 2;
+
+	GfxFill(0, 0, SCREEN_W, SCREEN_H, BSOD_BLUE);
+	GfxFill(nMidX - 28, 70, nMidX + 28, 88, CL_FACE); // "DCWin" banner box
+	hdc = GfxLockDC();
+	if (!hdc)
+		return;
+	GfxText(hdc, nMidX - 19, 72, BSOD_BLUE, CL_FACE, g_FontBold, L"DCWin");
+	GfxText(hdc, 60, 124, CL_WHITE, BSOD_BLUE, g_FontUI, L"An error has occurred. To continue:");
+	GfxText(hdc, 60, 154, CL_WHITE, BSOD_BLUE, g_FontUI,
+	        L"Press any key to return to the desktop, or");
+	GfxText(hdc, 60, 172, CL_WHITE, BSOD_BLUE, g_FontUI, L"press CTRL+ALT+DEL to restart.");
+	GfxText(hdc, 60, 190, CL_WHITE, BSOD_BLUE, g_FontUI,
+	        L"You will lose unsaved information in all open applications.");
+	wsprintfW(sz, L"%s  caused an exception  %08X  (%s)",
+	          s_crash.proc[0] ? s_crash.proc : L"A program", (unsigned)s_crash.code,
+	          ExcDesc(s_crash.code));
+	GfxText(hdc, 60, 230, CL_WHITE, BSOD_BLUE, g_FontUI, sz);
+	wsprintfW(sz, L"at address  %08X.", (unsigned)s_crash.addr);
+	GfxText(hdc, 60, 248, CL_WHITE, BSOD_BLUE, g_FontUI, sz);
+	if (s_crash.access != 0xFFFFFFFF)
+	{
+		wsprintfW(sz, L"The instruction %s memory at  %08X.", s_crash.access ? L"wrote" : L"read",
+		          (unsigned)s_crash.badAddr);
+		GfxText(hdc, 60, 266, CL_WHITE, BSOD_BLUE, g_FontUI, sz);
+	}
+	GfxText(hdc, nMidX - 92, 330, CL_WHITE, BSOD_BLUE, g_FontUI, L"Press any key to continue _");
+	GfxUnlockDC(hdc);
+}
+
 static void Render(void)
 {
 	HDC hdc;
 	int i;
+
+	if (s_bBsod) // a client crashed: blue screen replaces the whole desktop
+	{
+		RenderBsod();
+		return;
+	}
 
 	SnapWindows();
 
@@ -1851,177 +1965,220 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpszCmd, int nShow)
 		}
 
 		DInUpdate(); // poll DI devices once per frame
+		// Crash watch: a client filled DcCrash + bumped seq -> raise a Win9x blue screen. The
+		// desktop freezes until any key/button dismisses it (the crashed app is reaped after).
+		if (s_pShared && s_pShared->crash.seq != s_dwCrashSeq) // a dcwlib client faulted
+		{
+			s_dwCrashSeq = s_pShared->crash.seq;
+			s_crash = s_pShared->crash;
+			RaiseBsod();
+		}
+		if (s_bBsod)
 		{
 			DWORD dwVk;
+			int bAny = 0;
 			while (DInNextKey(&dwVk))
-				OnKey(dwVk);
-		}
-
-		// Global hotkeys for windowed apps (the shell loop is running, so we read input
-		// directly). Edge-detected: fire once per press, not every frame held. ALT+F4 or the
-		// controller's START+A close the focused window (same path as ESC / the X button);
-		// CTRL+ALT+DEL opens the task manager. (Fullscreen apps are handled inside GfxLaunch.)
-		{
-			static int s_nLastHk = DIN_HK_NONE;
-			int nHk = DInHotkey();
-			if (nHk == DIN_HK_NONE && DInPadCombo())
-				nHk = DIN_HK_ALTF4; // START+A closes the focused window too
-			if (nHk != DIN_HK_NONE && nHk != s_nLastHk)
+				bAny = 1;
+			// Require the screen to have been up briefly, so a held button / the launch press
+			// doesn't dismiss it instantly.
+			if (GetTickCount() - s_dwBsodAt > 400 &&
+			    (bAny || DInTookActivate() || DInTookContext() || DInTookClick()))
 			{
-				if (nHk == DIN_HK_ALTF4)
-				{
-					if (s_nFocus >= 0 && s_pShared && s_pShared->win[s_nFocus].inUse)
-					{
-						s_pShared->win[s_nFocus].wantClose = 1;
-						s_bDirty = 1;
-					}
-				}
-				else if (nHk == DIN_HK_CTRLALTDEL)
-					LaunchApp(L"dcwtask.exe", NULL);
-			}
-			s_nLastHk = nHk;
-		}
-
-		bMoved = 0;
-		if (DInHasPointer())
-		{
-			int nOldX = s_nCx, nOldY = s_nCy;
-			DInCursor(&s_nCx, &s_nCy);
-			if (s_nCx != nOldX || s_nCy != nOldY)
-				bMoved = 1; // cursor moved -> needs a present
-			// Hover follows the pointer ONLY while it's actually moving, so a parked cursor doesn't
-			// fight the D-pad (the analog stick is also "the pointer"). Moving over the bare
-			// desktop CLEARS the selection (-1) so A on empty space can't re-launch the
-			// last-hovered icon.
-			if (bMoved && s_pCtxItems) // open context menu: highlight the row under the cursor
-			{
-				if (s_nCx >= s_nCtxX && s_nCx < s_nCtxX + CTX_W && s_nCy >= s_nCtxY + 3 &&
-				    s_nCy < s_nCtxY + 3 + s_nCtxCount * CTX_ROW_H)
-				{
-					int nRow = (s_nCy - (s_nCtxY + 3)) / CTX_ROW_H;
-					if (nRow >= 0 && nRow < s_nCtxCount && nRow != s_nCtxSel)
-					{
-						s_nCtxSel = nRow;
-						s_bDirty = 1;
-					}
-				}
-			}
-			else if (bMoved && !s_pCtxItems && !s_bDlgOpen && !s_bMenuOpen &&
-			         !PointOverWindow(s_nCx, s_nCy))
-			{
-				int nHover = DeskIconAt(s_nCx, s_nCy); // -1 when over empty desktop
-				if (nHover != s_nDeskSel)
-				{
-					s_nDeskSel = nHover;
-					s_bDirty = 1;
-				}
-			}
-		}
-		// Pointer press / drag / release. A press that doesn't drag is a CLICK on release
-		// (preserving the old click + controller-activate behaviour); a press that grabs a
-		// title bar / window corner / desktop icon and then moves becomes a drag.
-		{
-			int bPtr = DInPointerDown();
-			if (bPtr && !s_bPtrWas) // DOWN: arm a possible drag
-			{
-				s_nDownX = s_nCx;
-				s_nDownY = s_nCy;
-				s_bDragMoved = 0;
-				DragHitTest(s_nCx, s_nCy);
+				s_bBsod = 0;
 				s_bDirty = 1;
 			}
-			else if (bPtr && s_bPtrWas) // HELD: drag once past the threshold
+			bMoved = 0;
+		}
+		else
+		{
 			{
-				if (!s_bDragMoved &&
-				    (abs(s_nCx - s_nDownX) > DRAG_THRESH || abs(s_nCy - s_nDownY) > DRAG_THRESH))
-					s_bDragMoved = 1;
-				if (s_bDragMoved && s_nDragKind != DRAG_NONE)
-					DragApply(s_nCx, s_nCy);
+				DWORD dwVk;
+				while (DInNextKey(&dwVk))
+					OnKey(dwVk);
 			}
-			else if (!bPtr && s_bPtrWas) // UP: drop, or click if it never moved
+
+			// Global hotkeys for windowed apps (the shell loop is running, so we read input
+			// directly). Edge-detected: fire once per press, not every frame held. ALT+F4 or the
+			// controller's START+A close the focused window (same path as ESC / the X button);
+			// CTRL+ALT+DEL opens the task manager. (Fullscreen apps are handled inside GfxLaunch.)
 			{
-				if (!s_bDragMoved)
+				static int s_nLastHk = DIN_HK_NONE;
+				int nHk = DInHotkey();
+				if (nHk == DIN_HK_NONE && DInPadCombo())
+					nHk = DIN_HK_ALTF4; // START+A closes the focused window too
+				if (nHk != DIN_HK_NONE && nHk != s_nLastHk)
 				{
-					if (!HandleClick(s_nCx, s_nCy))
-						OnKey(VK_RETURN);
+					if (nHk == DIN_HK_ALTF4)
+					{
+						if (s_nFocus >= 0 && s_pShared && s_pShared->win[s_nFocus].inUse)
+						{
+							s_pShared->win[s_nFocus].wantClose = 1;
+							s_bDirty = 1;
+						}
+					}
+					else if (nHk == DIN_HK_CTRLALTDEL)
+						LaunchApp(L"dcwtask.exe", NULL);
 				}
-				else if (s_nDragKind == DRAG_STARTITEM && s_nDragTarget >= 0)
+				s_nLastHk = nHk;
+			}
+
+			bMoved = 0;
+			if (DInHasPointer())
+			{
+				int nOldX = s_nCx, nOldY = s_nCy;
+				DInCursor(&s_nCx, &s_nCy);
+				if (s_nCx != nOldX || s_nCy != nOldY)
+					bMoved = 1; // cursor moved -> needs a present
+				// Hover follows the pointer ONLY while it's actually moving, so a parked cursor
+				// doesn't fight the D-pad (the analog stick is also "the pointer"). Moving over the
+				// bare desktop CLEARS the selection (-1) so A on empty space can't re-launch the
+				// last-hovered icon.
+				if (bMoved && s_pCtxItems) // open context menu: highlight the row under the cursor
+				{
+					if (s_nCx >= s_nCtxX && s_nCx < s_nCtxX + CTX_W && s_nCy >= s_nCtxY + 3 &&
+					    s_nCy < s_nCtxY + 3 + s_nCtxCount * CTX_ROW_H)
+					{
+						int nRow = (s_nCy - (s_nCtxY + 3)) / CTX_ROW_H;
+						if (nRow >= 0 && nRow < s_nCtxCount && nRow != s_nCtxSel)
+						{
+							s_nCtxSel = nRow;
+							s_bDirty = 1;
+						}
+					}
+				}
+				else if (bMoved &&
+				         s_bMenuOpen) // Start menu open: highlight the item under the cursor
 				{
 					int h = (int)START_N * ROW_H + 8, my = TASK_Y - h + 4;
-					if (s_nCy < TASK_Y &&
-					    (s_nCy < my || s_nCx >= 4 + MENU_W)) // dropped on the desktop
-						AddDesktopShortcut(s_nDragTarget, s_nCx, s_nCy);
-					s_bMenuOpen = 0;
+					if (s_nCx >= 4 && s_nCx < 4 + MENU_W && s_nCy >= my &&
+					    s_nCy < my + (int)START_N * ROW_H)
+					{
+						int nRow = (s_nCy - my) / ROW_H;
+						if (nRow >= 0 && nRow < (int)START_N && nRow != s_nMenuSel)
+						{
+							s_nMenuSel = nRow;
+							s_bDirty = 1;
+						}
+					}
 				}
-				else if (s_nDragKind == DRAG_ICON && s_nDragTarget >= 0 && s_nDragTarget < s_cDesk)
-					DropIcon(s_nDragTarget, s_nCx, s_nCy); // commit the icon to the drop point
-				s_nDragKind = DRAG_NONE;
-				s_nDragTarget = -1;
-				s_bDragMoved = 0;
-				s_bDirty = 1;
-			}
-			s_bPtrWas = bPtr;
-			PublishPointer(s_nCx, s_nCy, bPtr); // deliver the cursor to the window under it
-		}
-		// Right-click (LT+A on the pad, or the DC mouse's right button): over an app window,
-		// forward a context request (VK_APPS) to it so the app shows its own menu; over the bare
-		// desktop, open the shell's context menu.
-		if (DInTookContext() && !s_bDlgOpen)
-		{
-			int kWin = WindowAt(s_nCx, s_nCy);
-			if (kWin >= 0 && s_pShared)
-			{
-				DcWindow *w = &s_pShared->win[kWin];
-				s_nFocus = kWin;
-				w->in[w->inHead % DCWIN_MAXIN].type = 1;
-				w->in[w->inHead % DCWIN_MAXIN].key = VK_APPS;
-				w->inHead++;
-				s_bDirty = 1;
-			}
-			else
-				OpenContextMenu(s_nCx, s_nCy);
-		}
-		// GWES WM-tap click path (DInPostClick) - independent of the held-button drag model.
-		if (DInTookClick())
-			HandleClick(s_nCx, s_nCy);
-
-		FixupFocus(); // auto-focus new windows, drop closed ones
-		if (s_pShared && s_pShared->execSeq != s_dwLastExec) // a window asked to launch an app
-		{
-			s_dwLastExec = s_pShared->execSeq;
-			ShellLaunch(s_pShared->execPath);
-		}
-		if (GetTickCount() >= dwNext) // clock tick -> repaint + reap dead windows
-		{
-			s_bDirty = 1;
-			dwNext += 1000;
-			ReapDeadWindows(); // free slots whose owner process is gone
-		}
-		// re-render only when a window published a new frame (digit typed, clock tick)
-		if (s_pShared)
-			for (i = 0; i < DCWIN_MAXWIN; i++)
-			{
-				DWORD dwGen = s_pShared->win[i].inUse ? s_pShared->win[i].gen : 0;
-				if (dwGen != s_adwLastGen[i])
+				else if (bMoved && !s_pCtxItems && !s_bDlgOpen && !s_bMenuOpen &&
+				         !PointOverWindow(s_nCx, s_nCy))
 				{
+					int nHover = DeskIconAt(s_nCx, s_nCy); // -1 when over empty desktop
+					if (nHover != s_nDeskSel)
+					{
+						s_nDeskSel = nHover;
+						s_bDirty = 1;
+					}
+				}
+			}
+			// Pointer press / drag / release. A press that doesn't drag is a CLICK on release
+			// (preserving the old click + controller-activate behaviour); a press that grabs a
+			// title bar / window corner / desktop icon and then moves becomes a drag.
+			{
+				int bPtr = DInPointerDown();
+				if (bPtr && !s_bPtrWas) // DOWN: arm a possible drag
+				{
+					s_nDownX = s_nCx;
+					s_nDownY = s_nCy;
+					s_bDragMoved = 0;
+					DragHitTest(s_nCx, s_nCy);
 					s_bDirty = 1;
-					s_adwLastGen[i] = dwGen;
 				}
-				if (!s_pShared->win[i].inUse)
+				else if (bPtr && s_bPtrWas) // HELD: drag once past the threshold
 				{
-					s_abWinMax[i] = 0;
-					s_abWinMin[i] = 0;
-				} // freed slot -> normal
+					if (!s_bDragMoved && (abs(s_nCx - s_nDownX) > DRAG_THRESH ||
+					                      abs(s_nCy - s_nDownY) > DRAG_THRESH))
+						s_bDragMoved = 1;
+					if (s_bDragMoved && s_nDragKind != DRAG_NONE)
+						DragApply(s_nCx, s_nCy);
+				}
+				else if (!bPtr && s_bPtrWas) // UP: drop, or click if it never moved
+				{
+					if (!s_bDragMoved)
+					{
+						if (!HandleClick(s_nCx, s_nCy))
+							OnKey(VK_RETURN);
+					}
+					else if (s_nDragKind == DRAG_STARTITEM && s_nDragTarget >= 0)
+					{
+						int h = (int)START_N * ROW_H + 8, my = TASK_Y - h + 4;
+						if (s_nCy < TASK_Y &&
+						    (s_nCy < my || s_nCx >= 4 + MENU_W)) // dropped on the desktop
+							AddDesktopShortcut(s_nDragTarget, s_nCx, s_nCy);
+						s_bMenuOpen = 0;
+					}
+					else if (s_nDragKind == DRAG_ICON && s_nDragTarget >= 0 &&
+					         s_nDragTarget < s_cDesk)
+						DropIcon(s_nDragTarget, s_nCx, s_nCy); // commit the icon to the drop point
+					s_nDragKind = DRAG_NONE;
+					s_nDragTarget = -1;
+					s_bDragMoved = 0;
+					s_bDirty = 1;
+				}
+				s_bPtrWas = bPtr;
+				PublishPointer(s_nCx, s_nCy, bPtr); // deliver the cursor to the window under it
 			}
-		// Drag ghost: a translucent icon trails the cursor while a drag is in flight.
-		if (s_bDragMoved && s_nDragKind == DRAG_ICON && s_nDragTarget >= 0 &&
-		    s_nDragTarget < s_cDesk)
-			GfxSetDragGhost(s_aDesk[s_nDragTarget].icon);
-		else if (s_bDragMoved && s_nDragKind == DRAG_STARTITEM && s_nDragTarget >= 0 &&
-		         s_nDragTarget < (int)START_N)
-			GfxSetDragGhost(s_start[s_nDragTarget].icon);
-		else
-			GfxSetDragGhost(-1);
+			// Right-click (LT+A on the pad, or the DC mouse's right button): over an app window,
+			// forward a context request (VK_APPS) to it so the app shows its own menu; over the
+			// bare desktop, open the shell's context menu.
+			if (DInTookContext() && !s_bDlgOpen)
+			{
+				int kWin = WindowAt(s_nCx, s_nCy);
+				if (kWin >= 0 && s_pShared)
+				{
+					DcWindow *w = &s_pShared->win[kWin];
+					s_nFocus = kWin;
+					w->in[w->inHead % DCWIN_MAXIN].type = 1;
+					w->in[w->inHead % DCWIN_MAXIN].key = VK_APPS;
+					w->inHead++;
+					s_bDirty = 1;
+				}
+				else
+					OpenContextMenu(s_nCx, s_nCy);
+			}
+			// GWES WM-tap click path (DInPostClick) - independent of the held-button drag model.
+			if (DInTookClick())
+				HandleClick(s_nCx, s_nCy);
+
+			FixupFocus(); // auto-focus new windows, drop closed ones
+			if (s_pShared && s_pShared->execSeq != s_dwLastExec) // a window asked to launch an app
+			{
+				s_dwLastExec = s_pShared->execSeq;
+				ShellLaunch(s_pShared->execPath);
+			}
+			if (GetTickCount() >= dwNext) // clock tick -> repaint + reap dead windows
+			{
+				s_bDirty = 1;
+				dwNext += 1000;
+				ReapDeadWindows(); // free slots whose owner process is gone
+			}
+			// re-render only when a window published a new frame (digit typed, clock tick)
+			if (s_pShared)
+				for (i = 0; i < DCWIN_MAXWIN; i++)
+				{
+					DWORD dwGen = s_pShared->win[i].inUse ? s_pShared->win[i].gen : 0;
+					if (dwGen != s_adwLastGen[i])
+					{
+						s_bDirty = 1;
+						s_adwLastGen[i] = dwGen;
+					}
+					if (!s_pShared->win[i].inUse)
+					{
+						s_abWinMax[i] = 0;
+						s_abWinMin[i] = 0;
+					} // freed slot -> normal
+				}
+			// Drag ghost: a translucent icon trails the cursor while a drag is in flight.
+			if (s_bDragMoved && s_nDragKind == DRAG_ICON && s_nDragTarget >= 0 &&
+			    s_nDragTarget < s_cDesk)
+				GfxSetDragGhost(s_aDesk[s_nDragTarget].icon);
+			else if (s_bDragMoved && s_nDragKind == DRAG_STARTITEM && s_nDragTarget >= 0 &&
+			         s_nDragTarget < (int)START_N)
+				GfxSetDragGhost(s_start[s_nDragTarget].icon);
+			else
+				GfxSetDragGhost(-1);
+		} // end of the normal (!s_bBsod) input/window processing
 		// The scene is a PVR2 quad list that GfxPresent consumes + clears, so we MUST
 		// Render() (rebuild quads) before every present - a bare present would submit
 		// an empty scene. Rebuild is cheap (no rasterization), so recompose+present on
@@ -2030,7 +2187,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpszCmd, int nShow)
 		{
 			Render();
 			s_bDirty = 0;
-			if (GfxPresent(s_nCx, s_nCy, DInHasPointer()))
+			if (GfxPresent(s_nCx, s_nCy, s_bBsod ? FALSE : DInHasPointer()))
 				s_bDirty = 1; // surface lost -> rebuild next loop
 			dwNextPresent = GetTickCount() + 100;
 		}
