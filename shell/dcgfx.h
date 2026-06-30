@@ -76,6 +76,8 @@ extern "C"
 	//
 	typedef int (*GFXPOLLFN)(void);
 	int GfxLaunch(const WCHAR *path, GFXPOLLFN pfnPoll);
+	DWORD GfxLastExitCode(
+	    void); // exit code of the last GfxLaunch (a fault code if the app crashed)
 
 	//
 	// Static desktop-layer cache. Paint the desktop once between Begin/End (into a
@@ -85,6 +87,7 @@ extern "C"
 	void GfxBeginDesktopCache(void);
 	void GfxEndDesktopCache(void);
 	void GfxBlitDesktopCache(void);
+	void GfxFreeQuads(void); // release the dynamic quad buffers (they regrow); frees ~0.5 MB
 
 	// Block until the PVR vblank (~60Hz) - pace the loop without Sleep's 50ms-tick rounding.
 	HRESULT GfxWaitVBlank(void);

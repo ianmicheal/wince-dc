@@ -805,10 +805,11 @@ BOOL GfxInit(HWND hwnd)
 	return TRUE;
 }
 
-void GfxShutdown(void)
+// Release the dynamic quad buffers (scene + desktop cache) back to the heap. They regrow on
+// demand (GrowQuads from QUAD_INIT) the next time the desktop composites, so this is safe to call
+// whenever the shell isn't drawing - e.g. while a fullscreen app owns the screen (frees ~0.5 MB).
+void GfxFreeQuads(void)
 {
-	DestroyD3D();
-	DestroySurfaces();
 	if (s_pVb)
 		LocalFree(s_pVb);
 	if (s_pIb)
@@ -825,6 +826,13 @@ void GfxShutdown(void)
 	s_pIb = s_pDib = NULL;
 	s_pQtex = s_pDtex = NULL;
 	s_nCap = s_nDcap = s_nQuad = s_nDQuad = 0;
+}
+
+void GfxShutdown(void)
+{
+	DestroyD3D();
+	DestroySurfaces();
+	GfxFreeQuads();
 }
 
 // --- public draw API: enqueue quads (no pixels touched) -------------------------
@@ -1404,6 +1412,12 @@ BOOL GfxDrawWallpaperRect(int dx, int dy, int dw, int dh)
 	return TRUE;
 }
 
+static DWORD s_dwLastExit = 0; // exit code of the last GfxLaunch'd app (crash code if it faulted)
+DWORD GfxLastExitCode(void)
+{
+	return s_dwLastExit;
+}
+
 int GfxLaunch(const WCHAR *path, GFXPOLLFN pfnPoll)
 {
 	PROCESS_INFORMATION pi;
@@ -1411,6 +1425,7 @@ int GfxLaunch(const WCHAR *path, GFXPOLLFN pfnPoll)
 
 	DestroyD3D();
 	DestroySurfaces();
+	GfxFreeQuads(); // the shell isn't compositing while the app runs -> hand its ~0.5 MB back
 	if (CreateProcessW(path, NULL, NULL, NULL, FALSE, 0, NULL, NULL, NULL, &pi))
 	{
 		if (pfnPoll)
@@ -1434,6 +1449,10 @@ int GfxLaunch(const WCHAR *path, GFXPOLLFN pfnPoll)
 			// input and must NOT touch the bus, or the game faults to the BIOS. Just wait.
 			WaitForSingleObject(pi.hProcess, INFINITE);
 		}
+		s_dwLastExit = 0;
+		GetExitCodeProcess(pi.hProcess, &s_dwLastExit); // crash code if it faulted unhandled
+		if (nKill)
+			s_dwLastExit = 0; // we killed it -> not a crash
 		CloseHandle(pi.hThread);
 		CloseHandle(pi.hProcess);
 	}
