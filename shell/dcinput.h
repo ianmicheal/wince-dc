@@ -38,6 +38,9 @@ extern "C"
 	void DInCursor(int *x, int *y);
 	int DInTookClick(void);    // TRUE once per mouse click (cursor paradigm)
 	int DInTookActivate(void); // TRUE once per controller face-button press (-> Enter)
+	int DInTookContext(
+	    void); // TRUE once on LT+A (controller) or right-button (DC mouse) -> context menu
+	int DInLeftTrigDown(void); // TRUE while the L trigger is held (the context-menu modifier)
 	int DInPointerDown(
 	    void); // TRUE while the pointer button is held (mouse-L / controller-A) - for drag
 

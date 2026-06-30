@@ -30,6 +30,9 @@ static BYTE g_aNow[256], g_aLast[256];
 static DWORD g_aRepeatAt[256];
 static int g_nCx = SCRW / 2, g_nCy = SCRH / 2;
 static int g_nBtnLast = 0, g_nMbtnLast = 0, g_nClick = 0, g_nActivate = 0;
+static int g_nLtHeld = 0;   // L trigger currently held (context-menu modifier)
+static int g_nCtxClick = 0; // one-shot: LT+A or DC-mouse right-button -> open context menu
+static int g_nCtxAHeld = 0; // edge tracking for the LT+A combo
 static int g_nMHeld = 0,
            g_nJHeld = 0; // pointer button currently HELD (mouse-L / controller-A) for drag
 static DWORD g_dwLastTick = 0;
@@ -50,6 +53,7 @@ static long g_lAccX = 0, g_lAccY = 0; // sub-pixel motion accumulators (axis*ms)
 #define USG_UA    7 // D-pad up
 #define USG_X     8
 #define USG_Y     9
+#define USG_LTRIG 0x11 // L trigger (maple USAGE_LTRIG_BUTTON 0xFF11) - enumerated as a button
 #define USG_N     24
 static signed char g_abBtnIdx[USG_N]; // Maple usage index -> rgbButtons[] index (-1 absent)
 static int g_nBtnEnum;                // running button count while enumerating
@@ -312,6 +316,9 @@ void DInReacquire(void)
 	g_nQh = g_nQt = 0; // drop any queued keys from before the hand-off
 	memset(g_aBeEdge, 0, sizeof(g_aBeEdge));
 	memset(g_aBeHeld, 0, sizeof(g_aBeHeld));
+	g_nCtxClick = 0;
+	g_nCtxAHeld = 0;
+	g_nLtHeld = 0;
 	OutputDebugStringW(L"DCIN: reacquired input\r\n");
 }
 
@@ -429,11 +436,16 @@ void DInUpdate(void)
 				g_nCy = 0;
 			if (g_nCy >= SCRH)
 				g_nCy = SCRH - 1;
-			nBtn = (ms.rgbButtons[0] | ms.rgbButtons[1] | ms.rgbButtons[2]) & 0x80;
+			nBtn = (ms.rgbButtons[0] | ms.rgbButtons[2]) & 0x80; // left + middle drive the pointer
 			// DI mouse drives the pointer button as a HELD state -> the shell's press/drag/
 			// release model handles click vs drag. (g_nClick stays for the GWES WM-tap path.)
 			g_nMHeld = nBtn ? 1 : 0;
-			(void)g_nMbtnLast;
+			{
+				int r = ms.rgbButtons[1] & 0x80; // right button -> context menu (edge)
+				if (r && !g_nMbtnLast)
+					g_nCtxClick = 1;
+				g_nMbtnLast = r ? 1 : 0;
+			}
 			(void)g_nMousePrimed;
 		}
 	}
@@ -450,6 +462,8 @@ void DInUpdate(void)
 			int nAx = js.lX < 0 ? -js.lX : js.lX;
 			int nAy = js.lY < 0 ? -js.lY : js.lY;
 			int i, dx, dy, face, dn[4];
+			int bLt = JBTN(js, USG_LTRIG); // L trigger = context-menu modifier
+			g_nLtHeld = bLt;
 			if (dwDt > 100)
 				dwDt = 100; // clamp after a stall so the cursor doesn't leap
 			// analog stick -> cursor: time-based + sub-pixel accumulator (speed is
@@ -487,9 +501,11 @@ void DInUpdate(void)
 			dn[1] = JBTN(js, USG_DA);
 			dn[2] = JBTN(js, USG_LA);
 			dn[3] = JBTN(js, USG_RA);
-			face = (JBTN(js, USG_A) || JBTN(js, USG_START)) ? 1 : 0;
-			g_nJHeld =
-			    (dwNowt < g_dwJoyPrimeUntil) ? 0 : JBTN(js, USG_A); // A held (drag), post-settle
+			// While LT is held, A is the context-menu chord (handled below), NOT activate/drag.
+			face = (!bLt && (JBTN(js, USG_A) || JBTN(js, USG_START))) ? 1 : 0;
+			g_nJHeld = (dwNowt < g_dwJoyPrimeUntil || bLt)
+			               ? 0
+			               : JBTN(js, USG_A); // A held (drag), post-settle
 			if (dwNowt < g_dwJoyPrimeUntil)
 			{
 				// STARTUP SETTLE WINDOW: just track the baseline, generate NO edges (lets the
@@ -502,6 +518,7 @@ void DInUpdate(void)
 					for (k = 0; k < 5; k++)
 						g_aBeHeld[k] = JBTN(js, s_aBeUsg[k]);
 				}
+				g_nCtxAHeld = (bLt && JBTN(js, USG_A)) ? 1 : 0; // baseline, no edge during settle
 			}
 			else
 			{
@@ -534,6 +551,14 @@ void DInUpdate(void)
 							g_aBeEdge[k] = 1;
 						g_aBeHeld[k] = d;
 					}
+				}
+				// LT + A chord -> context menu (right-click). One-shot edge; LT already
+				// suppressed A's activate/pointer above, so this can't double as a click.
+				{
+					int bA = JBTN(js, USG_A);
+					if (bLt && bA && !g_nCtxAHeld)
+						g_nCtxClick = 1;
+					g_nCtxAHeld = (bLt && bA) ? 1 : 0;
 				}
 			}
 		}
@@ -596,6 +621,16 @@ int DInPointerDown(void)
 {
 	return g_nMHeld || g_nJHeld;
 } // pointer button currently HELD (drag)
+int DInTookContext(void)
+{
+	int c = g_nCtxClick;
+	g_nCtxClick = 0;
+	return c;
+} // one-shot: LT+A (controller) or right-button (DC mouse) -> open the context menu
+int DInLeftTrigDown(void)
+{
+	return g_nLtHeld;
+} // L trigger held (the context-menu modifier)
 int DInButtonEdge(int btn)
 {
 	int e;
