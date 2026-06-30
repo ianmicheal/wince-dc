@@ -5,46 +5,46 @@
 #include <stdarg.h>
 #include "syslog.h"
 
-static SysLogShared *g_sl;
-static HANDLE g_map;
+static SysLogShared *g_pSl;
+static HANDLE g_hMap;
 
 SysLogShared *SysLogMap(int create)
 {
-	if (g_sl)
-		return g_sl;
+	if (g_pSl)
+		return g_pSl;
 	// CreateFileMapping on the same name returns the one global section (zero-filled on first
 	// create), so every process - and a WDM driver in wdevice.exe - shares the same ring.
-	g_map = CreateFileMappingW((HANDLE)-1, NULL, PAGE_READWRITE, 0, sizeof(SysLogShared),
-	                           SYSLOG_SECTION);
-	if (!g_map)
+	g_hMap = CreateFileMappingW((HANDLE)-1, NULL, PAGE_READWRITE, 0, sizeof(SysLogShared),
+	                            SYSLOG_SECTION);
+	if (!g_hMap)
 		return NULL;
-	g_sl = (SysLogShared *)MapViewOfFile(g_map, FILE_MAP_WRITE, 0, 0, sizeof(SysLogShared));
-	if (g_sl && create && g_sl->magic != SYSLOG_MAGIC)
-		g_sl->magic = SYSLOG_MAGIC; // first writer stamps it
-	return g_sl;
+	g_pSl = (SysLogShared *)MapViewOfFile(g_hMap, FILE_MAP_WRITE, 0, 0, sizeof(SysLogShared));
+	if (g_pSl && create && g_pSl->magic != SYSLOG_MAGIC)
+		g_pSl->magic = SYSLOG_MAGIC; // first writer stamps it
+	return g_pSl;
 }
 
-void SysLogW(const WCHAR *s)
+void SysLogW(const WCHAR *psz)
 {
-	SysLogShared *sl = SysLogMap(1);
-	LONG idx;
+	SysLogShared *pSl = SysLogMap(1);
+	LONG lIdx;
 	int i;
-	WCHAR *d;
-	if (!sl || !s)
+	WCHAR *pszDst;
+	if (!pSl || !psz)
 		return;
-	idx = InterlockedIncrement(&sl->head) - 1; // claim a slot
-	d = sl->line[(DWORD)idx % SYSLOG_LINES];
-	for (i = 0; i < SYSLOG_LINELEN - 1 && s[i]; i++)
-		d[i] = s[i];
-	d[i] = 0;
+	lIdx = InterlockedIncrement(&pSl->head) - 1; // claim a slot
+	pszDst = pSl->line[(DWORD)lIdx % SYSLOG_LINES];
+	for (i = 0; i < SYSLOG_LINELEN - 1 && psz[i]; i++)
+		pszDst[i] = psz[i];
+	pszDst[i] = 0;
 }
 
-void SysLog(const WCHAR *fmt, ...)
+void SysLog(const WCHAR *pszFmt, ...)
 {
-	WCHAR buf[SYSLOG_LINELEN];
+	WCHAR awchBuf[SYSLOG_LINELEN];
 	va_list ap;
-	va_start(ap, fmt);
-	wvsprintfW(buf, fmt, ap);
+	va_start(ap, pszFmt);
+	wvsprintfW(awchBuf, pszFmt, ap);
 	va_end(ap);
-	SysLogW(buf);
+	SysLogW(awchBuf);
 }

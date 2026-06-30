@@ -18,7 +18,7 @@ static struct DCWin g_win; // single window per client process
 
 DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title, int iconId)
 {
-	int i, idx = -1, tries;
+	int i, nIdx = -1, nTries;
 
 	g_win.hMap =
 	    CreateFileMappingW((HANDLE)-1, NULL, PAGE_READWRITE, 0, sizeof(DcShared), DCWIN_SECTION);
@@ -28,7 +28,7 @@ DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title, int iconId)
 	if (!g_win.sh)
 		return NULL;
 
-	for (tries = 0; tries < 50 && g_win.sh->magic != DCWIN_MAGIC; tries++)
+	for (nTries = 0; nTries < 50 && g_win.sh->magic != DCWIN_MAGIC; nTries++)
 		Sleep(20); // wait for the shell to initialise the section
 	if (g_win.sh->magic != DCWIN_MAGIC)
 		return NULL;
@@ -36,13 +36,13 @@ DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title, int iconId)
 	for (i = 0; i < DCWIN_MAXWIN; i++)
 		if (!g_win.sh->win[i].inUse)
 		{
-			idx = i;
+			nIdx = i;
 			break;
 		}
-	if (idx < 0)
+	if (nIdx < 0)
 		return NULL;
 
-	g_win.w = &g_win.sh->win[idx];
+	g_win.w = &g_win.sh->win[nIdx];
 	memset(g_win.w, 0, sizeof(DcWindow));
 	g_win.w->ownerPid = GetCurrentProcessId();
 	g_win.w->x = x;
@@ -61,137 +61,137 @@ DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title, int iconId)
 }
 
 // Current client size (the shell may have resized us). Returns 1 if it changed since last call.
-int DCWinClientSize(DCWin *win, int *cw, int *ch)
+int DCWinClientSize(DCWin *pWin, int *cw, int *ch)
 {
-	int w = (int)win->w->w, h = (int)win->w->h, changed;
+	int w = (int)pWin->w->w, h = (int)pWin->w->h, bChanged;
 	if (w < 1)
 		w = 1;
 	if (h < 1)
 		h = 1;
-	changed = (w != win->lastW || h != win->lastH);
-	win->lastW = w;
-	win->lastH = h;
+	bChanged = (w != pWin->lastW || h != pWin->lastH);
+	pWin->lastW = w;
+	pWin->lastH = h;
 	if (cw)
 		*cw = w;
 	if (ch)
 		*ch = h;
-	return changed;
+	return bChanged;
 }
 
 // 1 if the shell resized us since last call (consumes the change). OR into your dirty flag.
-int DCWinResized(DCWin *win)
+int DCWinResized(DCWin *pWin)
 {
-	return DCWinClientSize(win, 0, 0);
+	return DCWinClientSize(pWin, 0, 0);
 }
 
 // Fill the whole current client area with one colour - the standard first draw of a frame, so
 // the window always fills after a resize/maximize without the app tracking dimensions.
-void DCWinFillBg(DCWin *win, COLORREF color)
+void DCWinFillBg(DCWin *pWin, COLORREF color)
 {
-	int w = (int)win->w->w, h = (int)win->w->h;
+	int w = (int)pWin->w->w, h = (int)pWin->w->h;
 	if (w < 1)
 		w = 1;
 	if (h < 1)
 		h = 1;
-	DCWinFill(win, 0, 0, w, h, color);
+	DCWinFill(pWin, 0, 0, w, h, color);
 }
 
-void DCWinBeginFrame(DCWin *win)
+void DCWinBeginFrame(DCWin *pWin)
 {
-	win->buildN = 0;
+	pWin->buildN = 0;
 }
 
-void DCWinFill(DCWin *win, int x, int y, int w, int h, COLORREF color)
+void DCWinFill(DCWin *pWin, int x, int y, int w, int h, COLORREF color)
 {
-	DcCmd *c;
-	if (win->buildN >= DCWIN_MAXCMD)
+	DcCmd *pCmd;
+	if (pWin->buildN >= DCWIN_MAXCMD)
 		return;
-	c = &win->build[win->buildN++];
-	c->op = DCOP_FILL;
-	c->x = x;
-	c->y = y;
-	c->w = w;
-	c->h = h;
-	c->color = color;
+	pCmd = &pWin->build[pWin->buildN++];
+	pCmd->op = DCOP_FILL;
+	pCmd->x = x;
+	pCmd->y = y;
+	pCmd->w = w;
+	pCmd->h = h;
+	pCmd->color = color;
 }
 
-void DCWinText(DCWin *win, int x, int y, COLORREF fg, COLORREF bg, const WCHAR *text)
+void DCWinText(DCWin *pWin, int x, int y, COLORREF fg, COLORREF bg, const WCHAR *text)
 {
-	DcCmd *c;
+	DcCmd *pCmd;
 	int k;
-	if (win->buildN >= DCWIN_MAXCMD)
+	if (pWin->buildN >= DCWIN_MAXCMD)
 		return;
-	c = &win->build[win->buildN++];
-	c->op = DCOP_TEXT;
-	c->x = x;
-	c->y = y;
-	c->color = fg;
-	c->color2 = bg;
+	pCmd = &pWin->build[pWin->buildN++];
+	pCmd->op = DCOP_TEXT;
+	pCmd->x = x;
+	pCmd->y = y;
+	pCmd->color = fg;
+	pCmd->color2 = bg;
 	for (k = 0; k < 39 && text[k]; k++)
-		c->text[k] = text[k];
-	c->text[k] = 0;
+		pCmd->text[k] = text[k];
+	pCmd->text[k] = 0;
 }
 
-void DCWinIcon(DCWin *win, int x, int y, int iconId)
+void DCWinIcon(DCWin *pWin, int x, int y, int iconId)
 {
-	DcCmd *c;
-	if (win->buildN >= DCWIN_MAXCMD)
+	DcCmd *pCmd;
+	if (pWin->buildN >= DCWIN_MAXCMD)
 		return;
-	c = &win->build[win->buildN++];
-	c->op = DCOP_ICON;
-	c->x = x;
-	c->y = y;
-	c->color = (DWORD)iconId;
+	pCmd = &pWin->build[pWin->buildN++];
+	pCmd->op = DCOP_ICON;
+	pCmd->x = x;
+	pCmd->y = y;
+	pCmd->color = (DWORD)iconId;
 }
 
-void DCWinEndFrame(DCWin *win)
+void DCWinEndFrame(DCWin *pWin)
 {
 	int i;
-	win->w->gen++; // odd = writing (seqlock)
-	for (i = 0; i < win->buildN; i++)
-		win->w->cmd[i] = win->build[i];
-	win->w->cmdCount = win->buildN;
-	win->w->gen++; // even = stable
+	pWin->w->gen++; // odd = writing (seqlock)
+	for (i = 0; i < pWin->buildN; i++)
+		pWin->w->cmd[i] = pWin->build[i];
+	pWin->w->cmdCount = pWin->buildN;
+	pWin->w->gen++; // even = stable
 }
 
-int DCWinPollKey(DCWin *win, DWORD *key)
+int DCWinPollKey(DCWin *pWin, DWORD *key)
 {
-	if (win->w->inTail == win->w->inHead)
+	if (pWin->w->inTail == pWin->w->inHead)
 		return 0;
-	*key = win->w->in[win->w->inTail % DCWIN_MAXIN].key;
-	win->w->inTail++;
+	*key = pWin->w->in[pWin->w->inTail % DCWIN_MAXIN].key;
+	pWin->w->inTail++;
 	return 1;
 }
 
-int DCWinGetPointer(DCWin *win, int *x, int *y, int *btn)
+int DCWinGetPointer(DCWin *pWin, int *x, int *y, int *btn)
 {
-	if (win->w->ptrX < 0)
+	if (pWin->w->ptrX < 0)
 		return 0; // analog-stick cursor not over this window
 	if (x)
-		*x = (int)win->w->ptrX;
+		*x = (int)pWin->w->ptrX;
 	if (y)
-		*y = (int)win->w->ptrY;
+		*y = (int)pWin->w->ptrY;
 	if (btn)
-		*btn = (int)win->w->ptrBtn;
+		*btn = (int)pWin->w->ptrBtn;
 	return 1;
 }
 
-int DCWinShouldClose(DCWin *win)
+int DCWinShouldClose(DCWin *pWin)
 {
-	return win->w->wantClose != 0;
+	return pWin->w->wantClose != 0;
 }
 
-void DCWinExec(DCWin *win, const WCHAR *path)
+void DCWinExec(DCWin *pWin, const WCHAR *path)
 {
-	lstrcpyW(win->sh->execPath, path);
-	win->sh->execSeq++; // shell polls execSeq and launches execPath
+	lstrcpyW(pWin->sh->execPath, path);
+	pWin->sh->execSeq++; // shell polls execSeq and launches execPath
 }
 
-void DCWinClose(DCWin *win)
+void DCWinClose(DCWin *pWin)
 {
-	win->w->inUse = 0;
-	if (win->sh)
-		UnmapViewOfFile(win->sh);
-	if (win->hMap)
-		CloseHandle(win->hMap);
+	pWin->w->inUse = 0;
+	if (pWin->sh)
+		UnmapViewOfFile(pWin->sh);
+	if (pWin->hMap)
+		CloseHandle(pWin->hMap);
 }
