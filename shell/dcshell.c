@@ -63,6 +63,32 @@ static const SHORTCUT s_start[] = {
 };
 #define START_N (sizeof(s_start) / sizeof(s_start[0]))
 
+// --- right-click context menu (LT+A on the pad, or the DC mouse's right button) ---
+enum
+{
+	CTXC_OPEN = 1,
+	CTXC_DELETE,
+	CTXC_ARRANGE,
+	CTXC_REFRESH,
+	CTXC_DISPLAY
+};
+typedef struct
+{
+	const WCHAR *pszLabel;
+	int nCmd;
+} CtxItem;
+static const CtxItem s_aCtxIconUser[] = {{L"Open", CTXC_OPEN}, {L"Delete", CTXC_DELETE}};
+static const CtxItem s_aCtxIconBuiltin[] = {{L"Open", CTXC_OPEN}};
+static const CtxItem s_aCtxDesktop[] = {
+    {L"Arrange Icons", CTXC_ARRANGE}, {L"Refresh", CTXC_REFRESH}, {L"Properties", CTXC_DISPLAY}};
+#define CTX_ROW_H 18
+#define CTX_W     128
+static const CtxItem *s_pCtxItems = NULL; // NULL = context menu closed
+static int s_nCtxCount = 0;
+static int s_nCtxSel = 0;
+static int s_nCtxX = 0, s_nCtxY = 0; // popup top-left
+static int s_nCtxIcon = -1;          // desktop-icon index this menu acts on (-1 = empty desktop)
+
 static int s_nDeskSel = 0;
 static int s_bMenuOpen = 0;
 static int s_nMenuSel = 0;
@@ -377,6 +403,494 @@ static void ShellLaunch(const WCHAR *pszCmd)
 }
 
 //
+// Display Properties dialog (shell-internal modal), NT 4.0 "Background" tab styling: a monitor
+// graphic previewing the wallpaper, a dropdown to pick it, a Style dropdown, OK/Cancel/Apply.
+// Choosing a wallpaper live-applies it (the monitor preview + desktop update); Cancel reverts.
+//
+#define DLG_W        400
+#define DLG_H        400
+#define DLG_ROW      16
+#define WALL_MAX     16
+#define DLG_CTL_N    5           // wallpaper combo, style combo, OK, Cancel, Apply
+#define DISP_MAGIC   0x50534944u // 'D','I','S','P'
+#define DISP_VMUFILE "DCWINDSP.BIN"
+typedef struct
+{
+	DWORD dwMagic;
+	DWORD dwStyle;    // GFXWALL_*
+	WCHAR szWall[64]; // wallpaper file name in \CD-ROM\Wallpaper\ (empty = none)
+} DispCfg;
+
+static WCHAR s_aWall[WALL_MAX][64]; // [0] = "(None)", then the *.bmp file names on the disc
+static int s_cWall = 0;             // entry count (incl. "(None)")
+static int s_nCurWall = 0;          // committed wallpaper index + style (survive Cancel)
+static int s_nCurStyle = GFXWALL_STRETCH;
+static int s_bDlgOpen = 0; // the modal is up
+static int s_nDlgSel = 0;  // focused control (0..DLG_CTL_N-1)
+static int s_nDlgWall = 0; // chosen wallpaper while the dialog is open
+static int s_nDlgStyle = GFXWALL_STRETCH;
+static int s_nDdActive = -1; // open dropdown: -1 none, 0 = wallpaper, 1 = style
+static int s_nDdSel = 0;     // highlighted item in the open dropdown
+static const WCHAR *const s_aStyleName[2] = {L"Stretch", L"Center"};
+
+static void ScanWallpapers(void)
+{
+	WIN32_FIND_DATAW fd;
+	HANDLE h;
+	wsprintfW(s_aWall[0], L"(None)");
+	s_cWall = 1;
+	h = FindFirstFileW(L"\\CD-ROM\\Wallpaper\\*.bmp", &fd);
+	if (h != INVALID_HANDLE_VALUE)
+	{
+		do
+		{
+			if (s_cWall < WALL_MAX)
+				wsprintfW(s_aWall[s_cWall++], L"%s", fd.cFileName);
+		} while (FindNextFileW(h, &fd));
+		FindClose(h);
+	}
+}
+
+static void WallPath(int idx, WCHAR *pszOut) // full disc path for entry idx ("" = none)
+{
+	if (idx <= 0 || idx >= s_cWall)
+		pszOut[0] = 0;
+	else
+		wsprintfW(pszOut, L"\\CD-ROM\\Wallpaper\\%s", s_aWall[idx]);
+}
+
+static void ApplyWall(int idx, int nStyle) // push the choice to the live desktop
+{
+	WCHAR szPath[MAX_PATH];
+	WallPath(idx, szPath);
+	GfxSetWallpaper(szPath[0] ? szPath : NULL, nStyle);
+	s_bDeskDirty = 1;
+}
+
+static void PersistDisplay(void) // save the committed choice to its own VMU block
+{
+	DispCfg c;
+	memset(&c, 0, sizeof(c));
+	c.dwMagic = DISP_MAGIC;
+	c.dwStyle = (DWORD)s_nCurStyle;
+	if (s_nCurWall > 0 && s_nCurWall < s_cWall)
+		wsprintfW(c.szWall, L"%s", s_aWall[s_nCurWall]);
+	VmuSaveAs(DISP_VMUFILE, &c, sizeof(c));
+}
+
+// Rect of dialog control idx (0 wallpaper combo, 1 style combo, 2 OK, 3 Cancel, 4 Apply).
+static void DlgCtlRect(int idx, RECT *pr)
+{
+	int x0 = (SCREEN_W - DLG_W) / 2, y0 = (SCREEN_H - DLG_H) / 2;
+	switch (idx)
+	{
+		case 0:
+			SetRect(pr, x0 + 50, y0 + 232, x0 + 350, y0 + 252);
+			break;
+		case 1:
+			SetRect(pr, x0 + 50, y0 + 274, x0 + 210, y0 + 294);
+			break;
+		case 2:
+			SetRect(pr, x0 + 70, y0 + 350, x0 + 140, y0 + 376);
+			break;
+		case 3:
+			SetRect(pr, x0 + 160, y0 + 350, x0 + 230, y0 + 376);
+			break;
+		default:
+			SetRect(pr, x0 + 250, y0 + 350, x0 + 320, y0 + 376);
+			break;
+	}
+}
+
+static int DdCount(void) // items in the open dropdown
+{
+	return s_nDdActive == 0 ? s_cWall : (s_nDdActive == 1 ? 2 : 0);
+}
+static const WCHAR *DdText(int i)
+{
+	return s_nDdActive == 0 ? s_aWall[i] : s_aStyleName[i];
+}
+static void DdListRect(RECT *pr) // the open dropdown's list box (below its combo)
+{
+	RECT cb;
+	DlgCtlRect(s_nDdActive == 1 ? 1 : 0, &cb);
+	SetRect(pr, cb.left, cb.bottom, cb.right, cb.bottom + DdCount() * DLG_ROW + 4);
+}
+
+static void CloseDisplayDialog(int bApply)
+{
+	if (!bApply) // Cancel -> revert the live desktop to the committed choice
+		ApplyWall(s_nCurWall, s_nCurStyle);
+	s_bDlgOpen = 0;
+	s_nDdActive = -1;
+	s_bDirty = 1;
+	s_bDeskDirty = 1;
+}
+
+static void DlgCommit(void) // OK / Apply: commit the live choice + persist
+{
+	s_nCurWall = s_nDlgWall;
+	s_nCurStyle = s_nDlgStyle;
+	PersistDisplay();
+}
+
+static void DdSelect(int i) // pick item i in the open dropdown, live-apply, close it
+{
+	if (s_nDdActive == 0 && i >= 0 && i < s_cWall)
+		s_nDlgWall = i;
+	else if (s_nDdActive == 1 && i >= 0 && i < 2)
+		s_nDlgStyle = i;
+	s_nDdActive = -1;
+	ApplyWall(s_nDlgWall, s_nDlgStyle); // live preview: monitor + desktop
+	s_bDirty = 1;
+}
+
+static void DlgActivate(void) // A / click on the focused control
+{
+	switch (s_nDlgSel)
+	{
+		case 0: // wallpaper combo -> open its dropdown
+			s_nDdActive = 0;
+			s_nDdSel = s_nDlgWall;
+			break;
+		case 1: // style combo -> open its dropdown
+			s_nDdActive = 1;
+			s_nDdSel = s_nDlgStyle;
+			break;
+		case 2: // OK
+			DlgCommit();
+			CloseDisplayDialog(1);
+			break;
+		case 3: // Cancel
+			CloseDisplayDialog(0);
+			break;
+		default: // Apply
+			DlgCommit();
+			break;
+	}
+	s_bDirty = 1;
+}
+
+static void OpenDisplayDialog(void)
+{
+	ScanWallpapers();
+	s_nDlgWall = (s_nCurWall >= 0 && s_nCurWall < s_cWall) ? s_nCurWall : 0;
+	s_nDlgStyle = s_nCurStyle;
+	s_nDlgSel = 0;
+	s_nDdActive = -1;
+	s_bDlgOpen = 1;
+	s_bDirty = 1;
+}
+
+static void DlgOnKey(WPARAM wParam)
+{
+	if (s_nDdActive >= 0) // a dropdown is open: navigate its items
+	{
+		int n = DdCount();
+		if (wParam == VK_UP && s_nDdSel > 0)
+			s_nDdSel--;
+		else if (wParam == VK_DOWN && s_nDdSel < n - 1)
+			s_nDdSel++;
+		else if (wParam == VK_RETURN)
+			DdSelect(s_nDdSel);
+		else if (wParam == VK_ESCAPE)
+			s_nDdActive = -1; // close, no change
+		s_bDirty = 1;
+		return;
+	}
+	if (wParam == VK_UP && s_nDlgSel > 0)
+		s_nDlgSel--;
+	else if (wParam == VK_DOWN && s_nDlgSel < DLG_CTL_N - 1)
+		s_nDlgSel++;
+	else if (wParam == VK_RETURN)
+		DlgActivate();
+	else if (wParam == VK_ESCAPE)
+		CloseDisplayDialog(0);
+	s_bDirty = 1;
+}
+
+static void DlgClick(int x, int y)
+{
+	int i;
+	if (s_nDdActive >= 0) // dropdown open: a row picks, anywhere else closes it
+	{
+		RECT lr;
+		DdListRect(&lr);
+		if (x >= lr.left && x < lr.right && y >= lr.top + 2 && y < lr.top + 2 + DdCount() * DLG_ROW)
+			DdSelect((y - (lr.top + 2)) / DLG_ROW);
+		else
+			s_nDdActive = -1;
+		s_bDirty = 1;
+		return;
+	}
+	for (i = 0; i < DLG_CTL_N; i++)
+	{
+		RECT cr;
+		DlgCtlRect(i, &cr);
+		if (x >= cr.left && x < cr.right && y >= cr.top && y < cr.bottom)
+		{
+			s_nDlgSel = i;
+			DlgActivate();
+			return;
+		}
+	}
+	s_bDirty = 1; // elsewhere in the modal: ignore
+}
+
+// --- dialog render ---------------------------------------------------------------
+static void DlgComboFill(int idx) // sunken white field + a raised drop-arrow button
+{
+	RECT cr, ar;
+	DlgCtlRect(idx, &cr);
+	GfxFill(cr.left, cr.top, cr.right, cr.bottom, CL_WHITE);
+	GfxBevel(&cr, FALSE);
+	SetRect(&ar, cr.right - 16, cr.top + 1, cr.right - 1, cr.bottom - 1);
+	GfxFill(ar.left, ar.top, ar.right, ar.bottom, (idx == s_nDlgSel) ? CL_SEL : CL_FACE);
+	GfxBevel(&ar, TRUE); // drop arrow (blue when focused)
+}
+
+static void RenderDialogFills(void)
+{
+	RECT rc;
+	int x0, y0, mx, my, b;
+	if (!s_bDlgOpen)
+		return;
+	x0 = (SCREEN_W - DLG_W) / 2;
+	y0 = (SCREEN_H - DLG_H) / 2;
+	SetRect(&rc, x0, y0, x0 + DLG_W, y0 + DLG_H);
+	GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE);
+	GfxBevel(&rc, TRUE);
+	GfxFill(x0 + 2, y0 + 2, x0 + DLG_W - 2, y0 + 20, CL_TITLE); // title bar
+	SetRect(&rc, x0 + 8, y0 + 26, x0 + 96, y0 + 44);            // Background tab
+	GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE);
+	GfxBevel(&rc, TRUE);
+	// monitor graphic: bezel + screen (wallpaper preview) + stand
+	mx = x0 + (DLG_W - 180) / 2;
+	my = y0 + 50;
+	SetRect(&rc, mx, my, mx + 180, my + 150);
+	GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE);
+	GfxBevel(&rc, TRUE);
+	SetRect(&rc, mx + 14, my + 12, mx + 166, my + 126);
+	GfxBevel(&rc, FALSE); // sunken screen frame
+	if (!GfxDrawWallpaperRect(mx + 15, my + 13, 150, 112))
+		GfxFill(mx + 15, my + 13, mx + 165, my + 125, CL_DESKTOP); // (None) -> teal
+	GfxFill(mx + 80, my + 150, mx + 100, my + 160, CL_FACE);       // stand neck
+	SetRect(&rc, mx + 62, my + 160, mx + 118, my + 168);
+	GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE); // base
+	GfxBevel(&rc, TRUE);
+	DlgComboFill(0); // wallpaper + style combos
+	DlgComboFill(1);
+	for (b = 2; b < DLG_CTL_N; b++) // OK / Cancel / Apply
+	{
+		DlgCtlRect(b, &rc);
+		GfxFill(rc.left, rc.top, rc.right, rc.bottom, (b == s_nDlgSel) ? CL_SEL : CL_FACE);
+		GfxBevel(&rc, TRUE);
+	}
+	if (s_nDdActive >= 0) // open dropdown list box
+	{
+		DdListRect(&rc);
+		GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_WHITE);
+		GfxBevel(&rc, TRUE);
+		if (s_nDdSel >= 0 && s_nDdSel < DdCount())
+			GfxFill(rc.left + 2, rc.top + 2 + s_nDdSel * DLG_ROW, rc.right - 2,
+			        rc.top + 2 + (s_nDdSel + 1) * DLG_ROW, CL_SEL);
+	}
+}
+
+static void RenderDialogText(HDC hdc)
+{
+	int x0, y0, i;
+	RECT cr;
+	if (!s_bDlgOpen)
+		return;
+	x0 = (SCREEN_W - DLG_W) / 2;
+	y0 = (SCREEN_H - DLG_H) / 2;
+	GfxText(hdc, x0 + 8, y0 + 4, CL_WHITE, CL_TITLE, g_FontBold, L"Display Properties");
+	GfxText(hdc, x0 + 16, y0 + 29, CL_TEXT, CL_FACE, g_FontUI, L"Background");
+	GfxText(hdc, x0 + 50, y0 + 216, CL_TEXT, CL_FACE, g_FontUI, L"Wallpaper:");
+	DlgCtlRect(0, &cr);
+	GfxText(hdc, cr.left + 4, cr.top + 3, CL_TEXT, CL_WHITE, g_FontUI, s_aWall[s_nDlgWall]);
+	GfxText(hdc, x0 + 50, y0 + 258, CL_TEXT, CL_FACE, g_FontUI, L"Display:");
+	DlgCtlRect(1, &cr);
+	GfxText(hdc, cr.left + 4, cr.top + 3, CL_TEXT, CL_WHITE, g_FontUI, s_aStyleName[s_nDlgStyle]);
+	DlgCtlRect(2, &cr);
+	GfxText(hdc, cr.left + 24, cr.top + 6, (s_nDlgSel == 2) ? CL_WHITE : CL_TEXT,
+	        (s_nDlgSel == 2) ? CL_SEL : CL_FACE, g_FontUI, L"OK");
+	DlgCtlRect(3, &cr);
+	GfxText(hdc, cr.left + 14, cr.top + 6, (s_nDlgSel == 3) ? CL_WHITE : CL_TEXT,
+	        (s_nDlgSel == 3) ? CL_SEL : CL_FACE, g_FontUI, L"Cancel");
+	DlgCtlRect(4, &cr);
+	GfxText(hdc, cr.left + 18, cr.top + 6, (s_nDlgSel == 4) ? CL_WHITE : CL_TEXT,
+	        (s_nDlgSel == 4) ? CL_SEL : CL_FACE, g_FontUI, L"Apply");
+	GfxText(hdc, x0 + 16, y0 + DLG_H - 18, CL_TEXT, CL_FACE, g_FontUI,
+	        L"640 x 480    True Color    60 Hz");
+	if (s_nDdActive >= 0) // dropdown list text
+	{
+		RECT lr;
+		int n = DdCount();
+		DdListRect(&lr);
+		for (i = 0; i < n; i++)
+			GfxText(hdc, lr.left + 4, lr.top + 3 + i * DLG_ROW,
+			        (i == s_nDdSel) ? CL_WHITE : CL_TEXT, (i == s_nDdSel) ? CL_SEL : CL_WHITE,
+			        g_FontUI, DdText(i)); // list box is white
+	}
+}
+
+//
+// Right-click context menu
+//
+static int DeskIconAt(int x, int y) // desktop-icon index under (x,y), or -1
+{
+	int k;
+	for (k = 0; k < s_cDesk; k++)
+	{
+		int ix = s_aDeskPos[k].x, iy = s_aDeskPos[k].y;
+		if (x >= ix && x < ix + ICELL_W && y >= iy && y < iy + ICELL_H)
+			return k;
+	}
+	return -1;
+}
+
+static int WindowAt(int x, int y) // topmost open window at (x,y) (focused first), or -1
+{
+	int k;
+	if (!s_pShared)
+		return -1;
+	if (s_nFocus >= 0 && s_pShared->win[s_nFocus].inUse && !s_abWinMin[s_nFocus])
+	{
+		DcWindow *w = &s_pShared->win[s_nFocus];
+		if (x >= w->x - 2 && x < w->x + w->w + 2 && y >= w->y - 18 && y < w->y + w->h + 2)
+			return s_nFocus;
+	}
+	for (k = 0; k < DCWIN_MAXWIN; k++)
+	{
+		DcWindow *w = &s_pShared->win[k];
+		if (!w->inUse || s_abWinMin[k] || k == s_nFocus)
+			continue;
+		if (x >= w->x - 2 && x < w->x + w->w + 2 && y >= w->y - 18 && y < w->y + w->h + 2)
+			return k;
+	}
+	return -1;
+}
+
+static int PointOverWindow(int x, int y) // 1 if (x,y) is inside any open window (incl. its title)
+{
+	return WindowAt(x, y) >= 0;
+}
+
+static void CloseContextMenu(void)
+{
+	s_pCtxItems = NULL;
+	s_bDirty = 1;
+}
+
+// Open the context menu at (x,y): an icon menu if an icon is under the cursor (Delete only for
+// user-added shortcuts), else the empty-desktop menu (Arrange / Refresh / Properties).
+static void OpenContextMenu(int x, int y)
+{
+	int k = DeskIconAt(x, y), h;
+	s_bMenuOpen = 0; // close the Start menu if it was open
+	if (k >= 0)
+	{
+		s_nDeskSel = k;
+		s_nCtxIcon = k;
+		if (s_anDeskUser[k] >= 0)
+		{
+			s_pCtxItems = s_aCtxIconUser;
+			s_nCtxCount = sizeof(s_aCtxIconUser) / sizeof(s_aCtxIconUser[0]);
+		}
+		else
+		{
+			s_pCtxItems = s_aCtxIconBuiltin;
+			s_nCtxCount = sizeof(s_aCtxIconBuiltin) / sizeof(s_aCtxIconBuiltin[0]);
+		}
+	}
+	else
+	{
+		s_nCtxIcon = -1;
+		s_pCtxItems = s_aCtxDesktop;
+		s_nCtxCount = sizeof(s_aCtxDesktop) / sizeof(s_aCtxDesktop[0]);
+	}
+	s_nCtxSel = 0;
+	h = s_nCtxCount * CTX_ROW_H + 6;
+	if (x > SCREEN_W - CTX_W) // keep the popup fully on-screen
+		x = SCREEN_W - CTX_W;
+	if (y > TASK_Y - h)
+		y = TASK_Y - h;
+	if (x < 0)
+		x = 0;
+	if (y < 0)
+		y = 0;
+	s_nCtxX = x;
+	s_nCtxY = y;
+	s_bDirty = 1;
+}
+
+static void ContextActivate(void)
+{
+	int nCmd = (s_pCtxItems && s_nCtxSel >= 0 && s_nCtxSel < s_nCtxCount)
+	               ? s_pCtxItems[s_nCtxSel].nCmd
+	               : 0;
+	int nIcon = s_nCtxIcon;
+	CloseContextMenu();
+	switch (nCmd)
+	{
+		case CTXC_OPEN:
+			if (nIcon >= 0 && nIcon < s_cDesk)
+			{
+				if (s_aDesk[nIcon].path)
+					LaunchApp(L"dcwexp.exe", s_aDesk[nIcon].path);
+				else
+					ShellLaunch(s_aDesk[nIcon].exe);
+			}
+			break;
+		case CTXC_DELETE:
+			if (nIcon >= 0)
+				RemoveShortcut(nIcon); // built-ins are refused inside RemoveShortcut
+			s_bDeskDirty = 1;
+			break;
+		case CTXC_ARRANGE:
+			DeskPosInit(); // re-flow built-in icons into the column grid
+			s_bDeskDirty = 1;
+			break;
+		case CTXC_REFRESH:
+			s_bDeskDirty = 1;
+			break;
+		case CTXC_DISPLAY:
+			OpenDisplayDialog(); // wallpaper picker (the screensaver tab is a later phase)
+			break;
+	}
+	s_bDirty = 1;
+}
+
+static void RenderContextFills(void)
+{
+	RECT rc;
+	if (!s_pCtxItems)
+		return;
+	SetRect(&rc, s_nCtxX, s_nCtxY, s_nCtxX + CTX_W, s_nCtxY + s_nCtxCount * CTX_ROW_H + 6);
+	GfxFill(rc.left, rc.top, rc.right, rc.bottom, CL_FACE);
+	GfxBevel(&rc, TRUE);
+	if (s_nCtxSel >= 0 && s_nCtxSel < s_nCtxCount)
+		GfxFill(s_nCtxX + 3, s_nCtxY + 3 + s_nCtxSel * CTX_ROW_H, s_nCtxX + CTX_W - 3,
+		        s_nCtxY + 3 + (s_nCtxSel + 1) * CTX_ROW_H, CL_SEL);
+}
+
+static void RenderContextText(HDC hdc)
+{
+	int i;
+	if (!s_pCtxItems)
+		return;
+	for (i = 0; i < s_nCtxCount; i++)
+	{
+		COLORREF fg = (i == s_nCtxSel) ? CL_WHITE : CL_TEXT;
+		COLORREF bg = (i == s_nCtxSel) ? CL_SEL : CL_FACE;
+		GfxText(hdc, s_nCtxX + 10, s_nCtxY + 4 + i * CTX_ROW_H, fg, bg, g_FontUI,
+		        s_pCtxItems[i].pszLabel);
+	}
+}
+
+//
 // Window focus management
 //
 static int CountWindows(void)
@@ -494,6 +1008,7 @@ static void RenderDesktopFills(void)
 	int i, x, y;
 
 	GfxFill(0, 0, SCREEN_W, TASK_Y, CL_DESKTOP);
+	GfxBlitWallpaper(); // wallpaper quad over the teal fill, under the icons (no-op if unset)
 	for (i = 0; i < s_cDesk; i++)
 	{
 		int nLabelW = GfxTextWidth(g_FontUI, s_aDesk[i].label), nLabelX;
@@ -512,12 +1027,15 @@ static void RenderDesktopText(HDC hdc)
 	int i, x, y;
 	for (i = 0; i < s_cDesk; i++)
 	{
-		COLORREF bg = (i == s_nDeskSel && !s_bMenuOpen) ? CL_TITLE : CL_DESKTOP;
 		int nLabelW = GfxTextWidth(g_FontUI, s_aDesk[i].label), nLabelX;
 		x = s_aDeskPos[i].x;
 		y = s_aDeskPos[i].y;
 		nLabelX = x + ICELL_W / 2 - nLabelW / 2;
-		GfxText(hdc, nLabelX, y + 37, CL_WHITE, bg, g_FontUI, s_aDesk[i].label);
+		// Transparent label over the wallpaper: a dark drop shadow for legibility, then white text.
+		// The selection highlight (blue box) is drawn separately in RenderDesktopFills.
+		GfxText(hdc, nLabelX + 1, y + 38, RGB(0, 0, 0), GFX_TRANSPARENT, g_FontUI,
+		        s_aDesk[i].label);
+		GfxText(hdc, nLabelX, y + 37, CL_WHITE, GFX_TRANSPARENT, g_FontUI, s_aDesk[i].label);
 	}
 }
 
@@ -761,12 +1279,16 @@ static void Render(void)
 			RenderWindow(s_nFocus, TRUE);
 	}
 
-	// top layer: taskbar + Start menu
+	// top layer: taskbar + Start menu, then the context menu / modal dialog above everything
 	RenderTaskbarFills();
+	RenderContextFills();
+	RenderDialogFills();
 	hdc = GfxLockDC();
 	if (hdc)
 	{
 		RenderBarsText(hdc);
+		RenderContextText(hdc);
+		RenderDialogText(hdc);
 		GfxUnlockDC(hdc);
 	}
 	// The cursor is NOT in the scene here - GfxPresent appends it as the last quad.
@@ -787,6 +1309,30 @@ static void ActivateStartItem(void)
 
 static void OnKey(WPARAM wParam)
 {
+	if (s_bDlgOpen) // the modal dialog captures all keys
+	{
+		DlgOnKey(wParam);
+		return;
+	}
+	if (s_pCtxItems) // the context menu captures all keys while it is open
+	{
+		if (wParam == VK_UP && s_nCtxSel > 0)
+			s_nCtxSel--;
+		else if (wParam == VK_DOWN && s_nCtxSel < s_nCtxCount - 1)
+			s_nCtxSel++;
+		else if (wParam == VK_RETURN)
+		{
+			ContextActivate();
+			return;
+		}
+		else if (wParam == VK_ESCAPE)
+		{
+			CloseContextMenu();
+			return;
+		}
+		s_bDirty = 1;
+		return;
+	}
 	if (wParam == VK_TAB) // task-switch; or Start menu when no windows open
 	{
 		if (CountWindows() == 0)
@@ -836,6 +1382,12 @@ static void OnKey(WPARAM wParam)
 
 	// desktop - grid navigation (column-major: index = col*rows + row)
 	s_bDirty = 1;
+	if (s_nDeskSel < 0) // nothing selected (pointer last moved over empty desktop)
+	{
+		if (wParam == VK_UP || wParam == VK_DOWN || wParam == VK_LEFT || wParam == VK_RIGHT)
+			s_nDeskSel = 0; // first D-pad press picks an icon; Enter on empty space does nothing
+		return;
+	}
 	{
 		int nRow = s_nDeskSel % s_nDeskRows;
 		if (wParam == VK_UP && nRow > 0)
@@ -902,6 +1454,23 @@ static int HandleClick(int x, int y)
 	int k;
 	s_bDirty = 1;
 
+	if (s_bDlgOpen) // the modal dialog swallows all clicks
+	{
+		DlgClick(x, y);
+		return 1;
+	}
+	if (s_pCtxItems) // context menu open: a click on a row runs it, a click elsewhere dismisses
+	{
+		if (x >= s_nCtxX && x < s_nCtxX + CTX_W && y >= s_nCtxY + 3 &&
+		    y < s_nCtxY + 3 + s_nCtxCount * CTX_ROW_H)
+		{
+			s_nCtxSel = (y - (s_nCtxY + 3)) / CTX_ROW_H;
+			ContextActivate();
+		}
+		else
+			CloseContextMenu();
+		return 1;
+	}
 	if (s_bMenuOpen)
 	{
 		int h = (int)START_N * ROW_H + 8, my = TASK_Y - h + 4;
@@ -1201,6 +1770,31 @@ static void PublishPointer(int nCursorX, int nCursorY, int bDown)
 	}
 }
 
+// Choose the desktop wallpaper at boot: the user's saved choice from the VMU if present, else the
+// first \CD-ROM\Wallpaper\*.bmp so dropping BMPs on the disc Just Works without touching the UI.
+static void ApplyDisplayConfig(void)
+{
+	DispCfg c;
+	int nGot = 0, i;
+	ScanWallpapers();
+	s_nCurWall = (s_cWall > 1) ? 1 : 0; // default: first BMP, else none
+	s_nCurStyle = GFXWALL_STRETCH;
+	if (VmuLoadAs(DISP_VMUFILE, &c, sizeof(c), &nGot) && nGot >= (int)sizeof(c) &&
+	    c.dwMagic == DISP_MAGIC)
+	{
+		s_nCurStyle = (int)c.dwStyle;
+		s_nCurWall = 0; // saved "(None)" unless a name matches
+		if (c.szWall[0])
+			for (i = 1; i < s_cWall; i++)
+				if (lstrcmpiW(s_aWall[i], c.szWall) == 0)
+				{
+					s_nCurWall = i;
+					break;
+				}
+	}
+	ApplyWall(s_nCurWall, s_nCurStyle);
+}
+
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpszCmd, int nShow)
 {
 	WNDCLASSW wc;
@@ -1227,7 +1821,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpszCmd, int nShow)
 		return 1;
 	}
 	DbgStr(L"DCSHELL: desktop up\r\n");
-	DeskInit(); // seed shortcuts (built-ins + VMU-persisted) + lay out
+	DeskInit();           // seed shortcuts (built-ins + VMU-persisted) + lay out
+	ApplyDisplayConfig(); // load the desktop wallpaper (if any) from the disc
 
 	// Run a notch above client apps. We are the window server: input polling and the
 	// cursor present must preempt a CPU-bound or fast-republishing client, or the
@@ -1294,6 +1889,33 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpszCmd, int nShow)
 			DInCursor(&s_nCx, &s_nCy);
 			if (s_nCx != nOldX || s_nCy != nOldY)
 				bMoved = 1; // cursor moved -> needs a present
+			// Hover follows the pointer ONLY while it's actually moving, so a parked cursor doesn't
+			// fight the D-pad (the analog stick is also "the pointer"). Moving over the bare
+			// desktop CLEARS the selection (-1) so A on empty space can't re-launch the
+			// last-hovered icon.
+			if (bMoved && s_pCtxItems) // open context menu: highlight the row under the cursor
+			{
+				if (s_nCx >= s_nCtxX && s_nCx < s_nCtxX + CTX_W && s_nCy >= s_nCtxY + 3 &&
+				    s_nCy < s_nCtxY + 3 + s_nCtxCount * CTX_ROW_H)
+				{
+					int nRow = (s_nCy - (s_nCtxY + 3)) / CTX_ROW_H;
+					if (nRow >= 0 && nRow < s_nCtxCount && nRow != s_nCtxSel)
+					{
+						s_nCtxSel = nRow;
+						s_bDirty = 1;
+					}
+				}
+			}
+			else if (bMoved && !s_pCtxItems && !s_bDlgOpen && !s_bMenuOpen &&
+			         !PointOverWindow(s_nCx, s_nCy))
+			{
+				int nHover = DeskIconAt(s_nCx, s_nCy); // -1 when over empty desktop
+				if (nHover != s_nDeskSel)
+				{
+					s_nDeskSel = nHover;
+					s_bDirty = 1;
+				}
+			}
 		}
 		// Pointer press / drag / release. A press that doesn't drag is a CLICK on release
 		// (preserving the old click + controller-activate behaviour); a press that grabs a
@@ -1340,6 +1962,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpszCmd, int nShow)
 			}
 			s_bPtrWas = bPtr;
 			PublishPointer(s_nCx, s_nCy, bPtr); // deliver the cursor to the window under it
+		}
+		// Right-click (LT+A on the pad, or the DC mouse's right button): over an app window,
+		// forward a context request (VK_APPS) to it so the app shows its own menu; over the bare
+		// desktop, open the shell's context menu.
+		if (DInTookContext() && !s_bDlgOpen)
+		{
+			int kWin = WindowAt(s_nCx, s_nCy);
+			if (kWin >= 0 && s_pShared)
+			{
+				DcWindow *w = &s_pShared->win[kWin];
+				s_nFocus = kWin;
+				w->in[w->inHead % DCWIN_MAXIN].type = 1;
+				w->in[w->inHead % DCWIN_MAXIN].key = VK_APPS;
+				w->inHead++;
+				s_bDirty = 1;
+			}
+			else
+				OpenContextMenu(s_nCx, s_nCy);
 		}
 		// GWES WM-tap click path (DInPostClick) - independent of the held-button drag model.
 		if (DInTookClick())
