@@ -45,11 +45,11 @@ class CBrowserHost : public IOleClientSite,
 	void Destroy(void);
 	HWND GetControlWindow(void) const
 	{
-		return _hwnd;
+		return m_hwnd;
 	}
 	void SetRect(const RECT *prc); // relayout the control (resize)
-	HRESULT Navigate(LPCWSTR url); // (WinInet path - unused on DC; kept for about:blank)
-	HRESULT LoadUrl(LPCWSTR url);  // fetch via winsock and render the bytes into the control
+	HRESULT Navigate(LPCWSTR psz); // (WinInet path - unused on DC; kept for about:blank)
+	HRESULT LoadUrl(LPCWSTR psz);  // fetch via winsock and render the bytes into the control
 	void PumpPending(void);        // service a link the BeforeNavigate2 hook captured+cancelled
 	HRESULT GoBack(void);
 	HRESULT GoForward(void);
@@ -107,16 +107,16 @@ class CBrowserHost : public IOleClientSite,
 	HRESULT InitEvents(void);
 	HRESULT GetHtmlWindow(IHTMLWindow2 **ppWin);
 
-	ULONG _refs;
-	HWND _frame; // our top-level frame window (parent of the control)
-	HWND _hwnd;  // the control's window (from IOleWindow::GetWindow)
-	RECT _rc;    // control rect within the frame
-	IWebBrowser2 *_pWB2;
-	IOleObject *_pOle;
-	IOleInPlaceObject *_pIPO;
-	IOleInPlaceActiveObject *_pIPAO;
-	IConnectionPoint *_pCP;
-	DWORD _cookie;
+	ULONG m_cRefs;
+	HWND m_hwndFrame; // our top-level frame window (parent of the control)
+	HWND m_hwnd;      // the control's window (from IOleWindow::GetWindow)
+	RECT m_rc;        // control rect within the frame
+	IWebBrowser2 *m_pWB2;
+	IOleObject *m_pOle;
+	IOleInPlaceObject *m_pIPO;
+	IOleInPlaceActiveObject *m_pIPAO;
+	IConnectionPoint *m_pCP;
+	DWORD m_dwCookie;
 };
 
 #endif // __cplusplus

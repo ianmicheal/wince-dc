@@ -20,172 +20,174 @@ static const CLSID CLSID_DcwHttp = {
 // ---- winsock HTTP (self-contained; mirrors dcwnet) -------------------------------
 #define HTTP_MAXRESP (512 * 1024)
 
-static int AppendA(char *dst, const char *src)
+static int AppendA(char *pszDst, const char *pszSrc)
 {
 	int i = 0;
-	while (src[i])
+	while (pszSrc[i])
 	{
-		dst[i] = src[i];
+		pszDst[i] = pszSrc[i];
 		i++;
 	}
 	return i;
 }
-static const char *StrStrA2(const char *hay, const char *ndl)
+static const char *StrStrA2(const char *pszHay, const char *pszNdl)
 {
 	int i, j;
-	for (i = 0; hay[i]; i++)
+	for (i = 0; pszHay[i]; i++)
 	{
-		for (j = 0; ndl[j] && hay[i + j] == ndl[j]; j++)
+		for (j = 0; pszNdl[j] && pszHay[i + j] == pszNdl[j]; j++)
 			;
-		if (!ndl[j])
-			return hay + i;
+		if (!pszNdl[j])
+			return pszHay + i;
 	}
 	return 0;
 }
 
-static char *HttpFetch(const char *host, int port, const char *path, int *outLen)
+static char *HttpFetch(const char *pszHost, int nPort, const char *pszPath, int *pcbOut)
 {
 	SOCKET s = INVALID_SOCKET;
-	struct hostent *he;
+	struct hostent *phe;
 	SOCKADDR_IN sa;
-	char *buf = NULL;
-	int len = 0, n, rl;
-	char req[700];
+	char *pBuf = NULL;
+	int cb = 0, n, cbReq;
+	char szReq[700];
 	__try
 	{
-		he = gethostbyname(host);
-		if (!he || !he->h_addr_list[0])
+		phe = gethostbyname(pszHost);
+		if (!phe || !phe->h_addr_list[0])
 			return NULL;
 		s = socket(AF_INET, SOCK_STREAM, 0);
 		if (s == INVALID_SOCKET)
 			return NULL;
 		memset(&sa, 0, sizeof(sa));
 		sa.sin_family = AF_INET;
-		sa.sin_port = htons((u_short)port);
-		memcpy(&sa.sin_addr, he->h_addr_list[0], 4);
+		sa.sin_port = htons((u_short)nPort);
+		memcpy(&sa.sin_addr, phe->h_addr_list[0], 4);
 		if (connect(s, (SOCKADDR *)&sa, sizeof(sa)) != 0)
 		{
 			closesocket(s);
 			return NULL;
 		}
-		rl = AppendA(req, "GET ");
-		rl += AppendA(req + rl, path);
-		rl += AppendA(req + rl, " HTTP/1.0\r\nHost: ");
-		rl += AppendA(req + rl, host);
-		rl += AppendA(req + rl, "\r\nUser-Agent: Mozilla/4.0 (compatible; DCWin)\r\nAccept: "
-		                        "*/*\r\nConnection: close\r\n\r\n");
-		send(s, req, rl, 0);
-		buf = (char *)LocalAlloc(LMEM_FIXED, HTTP_MAXRESP);
-		if (!buf)
+		cbReq = AppendA(szReq, "GET ");
+		cbReq += AppendA(szReq + cbReq, pszPath);
+		cbReq += AppendA(szReq + cbReq, " HTTP/1.0\r\nHost: ");
+		cbReq += AppendA(szReq + cbReq, pszHost);
+		cbReq +=
+		    AppendA(szReq + cbReq, "\r\nUser-Agent: Mozilla/4.0 (compatible; DCWin)\r\nAccept: "
+		                           "*/*\r\nConnection: close\r\n\r\n");
+		send(s, szReq, cbReq, 0);
+		pBuf = (char *)LocalAlloc(LMEM_FIXED, HTTP_MAXRESP);
+		if (!pBuf)
 		{
 			closesocket(s);
 			return NULL;
 		}
 		for (;;)
 		{
-			if (len >= HTTP_MAXRESP - 4096)
+			if (cb >= HTTP_MAXRESP - 4096)
 				break;
-			n = recv(s, buf + len, 4096, 0);
+			n = recv(s, pBuf + cb, 4096, 0);
 			if (n <= 0)
 				break;
-			len += n;
+			cb += n;
 		}
 		closesocket(s);
-		buf[len] = 0;
-		*outLen = len;
-		return buf;
+		pBuf[cb] = 0;
+		*pcbOut = cb;
+		return pBuf;
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
 		if (s != INVALID_SOCKET)
 			closesocket(s);
-		if (buf)
-			LocalFree(buf);
+		if (pBuf)
+			LocalFree(pBuf);
 		return NULL;
 	}
 }
 
 // Parse an http URL, GET it, follow one-scheme (http) redirects. Returns the LocalAlloc'd
 // response (caller LocalFree) with the body offset/length filled in, or NULL.
-static char *FetchUrlA(const char *urlIn, int *bodyOff, int *bodyLen)
+static char *FetchUrlA(const char *pszUrlIn, int *pBodyOff, int *pBodyLen)
 {
-	char url[600];
-	int hop, i = 0;
-	while (urlIn[i] && i < 599)
+	char szUrl[600];
+	int iHop, i = 0;
+	while (pszUrlIn[i] && i < 599)
 	{
-		url[i] = urlIn[i];
+		szUrl[i] = pszUrlIn[i];
 		i++;
 	}
-	url[i] = 0;
+	szUrl[i] = 0;
 
-	for (hop = 0; hop < 4; hop++)
+	for (iHop = 0; iHop < 4; iHop++)
 	{
-		const char *u = url, *h;
-		char host[256], path[512];
-		int port = 80, k;
-		if (u[0] == 'h' && u[1] == 't' && u[2] == 't' && u[3] == 'p' && u[4] == 's')
+		const char *pszU = szUrl, *pszH;
+		char szHost[256], szPath[512];
+		int nPort = 80, k;
+		if (pszU[0] == 'h' && pszU[1] == 't' && pszU[2] == 't' && pszU[3] == 'p' && pszU[4] == 's')
 			return NULL; // no TLS
-		if (u[0] == 'd' && u[1] == 'c' && u[2] == 'w' && u[3] == ':' && u[4] == '/' && u[5] == '/')
-			u += 6; // our scheme
-		else if (u[0] == 'h' && u[1] == 't' && u[2] == 't' && u[3] == 'p' && u[4] == ':' &&
-		         u[5] == '/' && u[6] == '/')
-			u += 7;
-		for (k = 0; u[k] && u[k] != '/' && u[k] != ':' && k < 255; k++)
-			host[k] = u[k];
-		host[k] = 0;
-		h = u + k;
-		if (*h == ':')
+		if (pszU[0] == 'd' && pszU[1] == 'c' && pszU[2] == 'w' && pszU[3] == ':' &&
+		    pszU[4] == '/' && pszU[5] == '/')
+			pszU += 6; // our scheme
+		else if (pszU[0] == 'h' && pszU[1] == 't' && pszU[2] == 't' && pszU[3] == 'p' &&
+		         pszU[4] == ':' && pszU[5] == '/' && pszU[6] == '/')
+			pszU += 7;
+		for (k = 0; pszU[k] && pszU[k] != '/' && pszU[k] != ':' && k < 255; k++)
+			szHost[k] = pszU[k];
+		szHost[k] = 0;
+		pszH = pszU + k;
+		if (*pszH == ':')
 		{
-			port = 0;
-			h++;
-			while (*h >= '0' && *h <= '9')
-				port = port * 10 + (*h++ - '0');
+			nPort = 0;
+			pszH++;
+			while (*pszH >= '0' && *pszH <= '9')
+				nPort = nPort * 10 + (*pszH++ - '0');
 		}
-		if (*h != '/')
+		if (*pszH != '/')
 		{
-			path[0] = '/';
-			path[1] = 0;
+			szPath[0] = '/';
+			szPath[1] = 0;
 		}
 		else
 		{
 			k = 0;
-			while (h[k] && k < 510)
+			while (pszH[k] && k < 510)
 			{
-				path[k] = h[k];
+				szPath[k] = pszH[k];
 				k++;
 			}
-			path[k] = 0;
+			szPath[k] = 0;
 		}
 
 		{
-			int len;
-			char *resp = HttpFetch(host, port, path, &len);
-			if (!resp)
+			int cb;
+			char *pResp = HttpFetch(szHost, nPort, szPath, &cb);
+			if (!pResp)
 				return NULL;
-			if (resp[9] == '3') // redirect
+			if (pResp[9] == '3') // redirect
 			{
-				const char *loc = StrStrA2(resp, "\nLocation:");
-				if (!loc)
-					loc = StrStrA2(resp, "\nlocation:");
-				if (loc)
+				const char *pszLoc = StrStrA2(pResp, "\nLocation:");
+				if (!pszLoc)
+					pszLoc = StrStrA2(pResp, "\nlocation:");
+				if (pszLoc)
 				{
 					int j = 0;
-					loc += 10;
-					while (*loc == ' ')
-						loc++;
-					while (*loc && *loc != '\r' && *loc != '\n' && j < 599)
-						url[j++] = *loc++;
-					url[j] = 0;
-					LocalFree(resp);
+					pszLoc += 10;
+					while (*pszLoc == ' ')
+						pszLoc++;
+					while (*pszLoc && *pszLoc != '\r' && *pszLoc != '\n' && j < 599)
+						szUrl[j++] = *pszLoc++;
+					szUrl[j] = 0;
+					LocalFree(pResp);
 					continue;
 				}
 			}
 			{
-				const char *body = StrStrA2(resp, "\r\n\r\n");
-				*bodyOff = body ? (int)(body + 4 - resp) : 0;
-				*bodyLen = len - *bodyOff;
+				const char *pszBody = StrStrA2(pResp, "\r\n\r\n");
+				*pBodyOff = pszBody ? (int)(pszBody + 4 - pResp) : 0;
+				*pBodyLen = cb - *pBodyOff;
 			}
-			return resp;
+			return pResp;
 		}
 	}
 	return NULL;
@@ -194,27 +196,27 @@ static char *FetchUrlA(const char *urlIn, int *bodyOff, int *bodyLen)
 // ---- the per-request protocol object ---------------------------------------------
 class CDcwHttp : public IInternetProtocol
 {
-	ULONG _refs;
-	char *_resp;
-	int _bodyOff, _bodyLen, _pos;
-	IInternetProtocolSink *_pSink;
-	int _resultDone;
+	ULONG m_cRefs;
+	char *m_pResp;
+	int m_nBodyOff, m_nBodyLen, m_nPos;
+	IInternetProtocolSink *m_pSink;
+	int m_bResultDone;
 
   public:
 	CDcwHttp()
 	{
-		_refs = 1;
-		_resp = NULL;
-		_bodyOff = _bodyLen = _pos = 0;
-		_pSink = NULL;
-		_resultDone = 0;
+		m_cRefs = 1;
+		m_pResp = NULL;
+		m_nBodyOff = m_nBodyLen = m_nPos = 0;
+		m_pSink = NULL;
+		m_bResultDone = 0;
 	}
 	~CDcwHttp()
 	{
-		if (_resp)
-			LocalFree(_resp);
-		if (_pSink)
-			_pSink->Release();
+		if (m_pResp)
+			LocalFree(m_pResp);
+		if (m_pSink)
+			m_pSink->Release();
 	}
 
 	STDMETHOD(QueryInterface)(REFIID riid, void **ppv)
@@ -231,34 +233,34 @@ class CDcwHttp : public IInternetProtocol
 	}
 	STDMETHOD_(ULONG, AddRef)(void)
 	{
-		return ++_refs;
+		return ++m_cRefs;
 	}
 	STDMETHOD_(ULONG, Release)(void)
 	{
-		if (--_refs == 0)
+		if (--m_cRefs == 0)
 		{
 			delete this;
 			return 0;
 		}
-		return _refs;
+		return m_cRefs;
 	}
 
 	// IInternetProtocolRoot
 	STDMETHOD(Start)(LPCWSTR szUrl, IInternetProtocolSink *pSink, IInternetBindInfo *pBI,
 	                 DWORD grfPI, DWORD dwReserved)
 	{
-		char urlA[600];
+		char szUrlA[600];
 		(void)pBI;
 		(void)grfPI;
 		(void)dwReserved;
-		WideCharToMultiByte(CP_ACP, 0, szUrl, -1, urlA, sizeof(urlA), NULL, NULL);
+		WideCharToMultiByte(CP_ACP, 0, szUrl, -1, szUrlA, sizeof(szUrlA), NULL, NULL);
 		OutputDebugStringW(L"proto: Start ");
 		OutputDebugStringW(szUrl);
 		OutputDebugStringW(L"\r\n");
 
-		_resp = FetchUrlA(urlA, &_bodyOff, &_bodyLen);
-		_pos = 0;
-		if (!_resp)
+		m_pResp = FetchUrlA(szUrlA, &m_nBodyOff, &m_nBodyLen);
+		m_nPos = 0;
+		if (!m_pResp)
 		{
 			OutputDebugStringW(L"proto: fetch FAILED\r\n");
 			pSink->ReportResult(INET_E_DOWNLOAD_FAILURE, 0, NULL);
@@ -266,17 +268,17 @@ class CDcwHttp : public IInternetProtocol
 		}
 		{
 			WCHAR b[64];
-			wsprintfW(b, L"proto: %d bytes\r\n", _bodyLen);
+			wsprintfW(b, L"proto: %d bytes\r\n", m_nBodyLen);
 			OutputDebugStringW(b);
 		}
-		_pSink = pSink;
-		_pSink->AddRef(); // ReportResult is deferred until Read drains
+		m_pSink = pSink;
+		m_pSink->AddRef(); // ReportResult is deferred until Read drains
 		pSink->ReportProgress(BINDSTATUS_MIMETYPEAVAILABLE, L"text/html");
 		// FULLYAVAILABLE: all data is ready; mshtml will Read until S_FALSE. We must NOT call
 		// ReportResult yet - doing it before Read finishes makes mshtml re-bind + hang.
 		pSink->ReportData(BSCF_FIRSTDATANOTIFICATION | BSCF_LASTDATANOTIFICATION |
 		                      BSCF_DATAFULLYAVAILABLE,
-		                  _bodyLen, _bodyLen);
+		                  m_nBodyLen, m_nBodyLen);
 		return S_OK;
 	}
 	STDMETHOD(Continue)(PROTOCOLDATA *)
@@ -289,10 +291,10 @@ class CDcwHttp : public IInternetProtocol
 	}
 	STDMETHOD(Terminate)(DWORD)
 	{
-		if (_pSink)
+		if (m_pSink)
 		{
-			_pSink->Release();
-			_pSink = NULL;
+			m_pSink->Release();
+			m_pSink = NULL;
 		}
 		return S_OK;
 	}
@@ -308,26 +310,26 @@ class CDcwHttp : public IInternetProtocol
 	// IInternetProtocol
 	STDMETHOD(Read)(void *pv, ULONG cb, ULONG *pcbRead)
 	{
-		ULONG avail, nn;
-		if (!_resp)
+		ULONG cbAvail, cbRead;
+		if (!m_pResp)
 		{
 			if (pcbRead)
 				*pcbRead = 0;
 			return S_FALSE;
 		}
-		avail = (ULONG)(_bodyLen - _pos);
-		nn = (cb < avail) ? cb : avail;
-		if (nn)
-			memcpy(pv, _resp + _bodyOff + _pos, nn);
-		_pos += (int)nn;
+		cbAvail = (ULONG)(m_nBodyLen - m_nPos);
+		cbRead = (cb < cbAvail) ? cb : cbAvail;
+		if (cbRead)
+			memcpy(pv, m_pResp + m_nBodyOff + m_nPos, cbRead);
+		m_nPos += (int)cbRead;
 		if (pcbRead)
-			*pcbRead = nn;
-		if (_pos >= _bodyLen) // drained -> NOW signal the bind completed
+			*pcbRead = cbRead;
+		if (m_nPos >= m_nBodyLen) // drained -> NOW signal the bind completed
 		{
-			if (_pSink && !_resultDone)
+			if (m_pSink && !m_bResultDone)
 			{
-				_resultDone = 1;
-				_pSink->ReportResult(S_OK, 0, NULL);
+				m_bResultDone = 1;
+				m_pSink->ReportResult(S_OK, 0, NULL);
 			}
 			return S_FALSE;
 		}
@@ -371,15 +373,15 @@ class CDcwFactory : public IClassFactory
 	}
 	STDMETHOD(CreateInstance)(IUnknown *pUnkOuter, REFIID riid, void **ppv)
 	{
-		CDcwHttp *p;
+		CDcwHttp *pHttp;
 		if (pUnkOuter)
 			return CLASS_E_NOAGGREGATION;
-		p = new CDcwHttp();
-		if (!p)
+		pHttp = new CDcwHttp();
+		if (!pHttp)
 			return E_OUTOFMEMORY;
 		{
-			HRESULT hr = p->QueryInterface(riid, ppv);
-			p->Release();
+			HRESULT hr = pHttp->QueryInterface(riid, ppv);
+			pHttp->Release();
 			return hr;
 		}
 	}
