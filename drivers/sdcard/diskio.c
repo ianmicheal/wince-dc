@@ -6,45 +6,45 @@
 #include "fatfs/diskio.h"
 #include "sdblk.h"
 
-DSTATUS disk_initialize(BYTE pdrv)
+DSTATUS disk_initialize(BYTE bPdrv)
 {
-	(void)pdrv;
+	(void)bPdrv;
 	return SdInit() ? STA_NOINIT : 0;
 }
 
-DSTATUS disk_status(BYTE pdrv)
+DSTATUS disk_status(BYTE bPdrv)
 {
-	(void)pdrv;
+	(void)bPdrv;
 	return 0;
 }
 
-DRESULT disk_read(BYTE pdrv, BYTE *buff, DWORD sector, DWORD count)
+DRESULT disk_read(BYTE bPdrv, BYTE *pbBuff, DWORD dwSector, DWORD dwCount)
 {
-	(void)pdrv;
-	return SdReadSectors(sector, (int)count, buff) ? RES_ERROR : RES_OK;
+	(void)bPdrv;
+	return SdReadSectors(dwSector, (int)dwCount, pbBuff) ? RES_ERROR : RES_OK;
 }
 
-DRESULT disk_write(BYTE pdrv, const BYTE *buff, DWORD sector, DWORD count)
+DRESULT disk_write(BYTE bPdrv, const BYTE *pbBuff, DWORD dwSector, DWORD dwCount)
 {
-	(void)pdrv;
-	return SdWriteSectors(sector, (int)count, buff) ? RES_ERROR : RES_OK;
+	(void)bPdrv;
+	return SdWriteSectors(dwSector, (int)dwCount, pbBuff) ? RES_ERROR : RES_OK;
 }
 
-DRESULT disk_ioctl(BYTE pdrv, BYTE cmd, void *buff)
+DRESULT disk_ioctl(BYTE bPdrv, BYTE bCmd, void *pvBuff)
 {
-	(void)pdrv;
-	switch (cmd)
+	(void)bPdrv;
+	switch (bCmd)
 	{
 		case CTRL_SYNC:
 			return RES_OK;
 		case GET_SECTOR_COUNT:
-			*(DWORD *)buff = SdSectorCount();
+			*(DWORD *)pvBuff = SdSectorCount();
 			return RES_OK;
 		case GET_SECTOR_SIZE:
-			*(WORD *)buff = 512;
+			*(WORD *)pvBuff = 512;
 			return RES_OK;
 		case GET_BLOCK_SIZE:
-			*(DWORD *)buff = 1;
+			*(DWORD *)pvBuff = 1;
 			return RES_OK;
 	}
 	return RES_PARERR;

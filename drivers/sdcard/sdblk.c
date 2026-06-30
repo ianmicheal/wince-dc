@@ -28,97 +28,97 @@
 #define CMD58  58 // READ_OCR
 #define ACMD41 41 // SD_SEND_OP_COND
 
-static int g_inited = 0;
-static int g_byteAddr = 1; // 1 = SDSC (byte address), 0 = SDHC/SDXC (block address)
-static unsigned long g_sectors = 0;
+static int g_nInited = 0;
+static int g_nByteAddr = 1; // 1 = SDSC (byte address), 0 = SDHC/SDXC (block address)
+static unsigned long g_nSectors = 0;
 
-static unsigned char rb(void)
+static unsigned char Rb(void)
 {
 	return SpiRwByte(BUS, 0xFF);
 }
-static void wb(unsigned char b)
+static void Wb(unsigned char b)
 {
 	SpiRwByte(BUS, b);
 }
-static void cs(int assert)
+static void Cs(int nAssert)
 {
-	SpiSetCS(BUS, assert);
+	SpiSetCS(BUS, nAssert);
 } // assert=1 -> CS low
 
 // Send a command frame [0x40|cmd][arg32][crc], return the R1 response (0xFF on timeout).
-static unsigned char sd_cmd(int cmd, unsigned long arg)
+static unsigned char SdCmd(int nCmd, unsigned long dwArg)
 {
-	unsigned char crc = 0x01, r;
+	unsigned char bCrc = 0x01, bResp;
 	int i;
-	if (cmd == CMD0)
-		crc = 0x95; // valid CRC7 needed before CRC is turned off
-	if (cmd == CMD8)
-		crc = 0x87;
-	wb((unsigned char)(0x40 | cmd));
-	wb((unsigned char)(arg >> 24));
-	wb((unsigned char)(arg >> 16));
-	wb((unsigned char)(arg >> 8));
-	wb((unsigned char)(arg));
-	wb(crc);
+	if (nCmd == CMD0)
+		bCrc = 0x95; // valid CRC7 needed before CRC is turned off
+	if (nCmd == CMD8)
+		bCrc = 0x87;
+	Wb((unsigned char)(0x40 | nCmd));
+	Wb((unsigned char)(dwArg >> 24));
+	Wb((unsigned char)(dwArg >> 16));
+	Wb((unsigned char)(dwArg >> 8));
+	Wb((unsigned char)(dwArg));
+	Wb(bCrc);
 	for (i = 0; i < 16; i++)
 	{
-		r = rb();
-		if (!(r & 0x80))
-			return r;
+		bResp = Rb();
+		if (!(bResp & 0x80))
+			return bResp;
 	} // R1: top bit clears
 	return 0xFF;
 }
 
-static int sd_wait_ready(void) // poll until the card releases busy (returns 0xFF)
+static int SdWaitReady(void) // poll until the card releases busy (returns 0xFF)
 {
 	int i;
 	for (i = 0; i < 200000; i++)
-		if (rb() == 0xFF)
+		if (Rb() == 0xFF)
 			return 0;
 	return -1;
 }
 
-static void sd_read_csd(void) // CMD9 -> 16-byte CSD -> decode capacity into g_sectors
+static void SdReadCsd(void) // CMD9 -> 16-byte CSD -> decode capacity into g_nSectors
 {
-	unsigned char csd[16];
+	unsigned char abCsd[16];
 	int i;
-	if (sd_cmd(CMD9, 0) != 0)
+	if (SdCmd(CMD9, 0) != 0)
 		return;
 	for (i = 0; i < 100000; i++)
-		if (rb() == 0xFE)
+		if (Rb() == 0xFE)
 			break; // data start token
 	if (i == 100000)
 		return;
 	for (i = 0; i < 16; i++)
-		csd[i] = rb();
-	rb();
-	rb();                   // CSD CRC16
-	if ((csd[0] >> 6) == 1) // CSD v2 (SDHC/SDXC)
+		abCsd[i] = Rb();
+	Rb();
+	Rb();                     // CSD CRC16
+	if ((abCsd[0] >> 6) == 1) // CSD v2 (SDHC/SDXC)
 	{
-		unsigned long csize =
-		    ((unsigned long)(csd[7] & 0x3F) << 16) | ((unsigned long)csd[8] << 8) | csd[9];
-		g_sectors = (csize + 1) * 1024; // (C_SIZE+1) * 512KB / 512
+		unsigned long dwCsize =
+		    ((unsigned long)(abCsd[7] & 0x3F) << 16) | ((unsigned long)abCsd[8] << 8) | abCsd[9];
+		g_nSectors = (dwCsize + 1) * 1024; // (C_SIZE+1) * 512KB / 512
 	}
 	else // CSD v1 (SDSC)
 	{
-		unsigned long csize =
-		    ((unsigned long)(csd[6] & 0x03) << 10) | ((unsigned long)csd[7] << 2) | (csd[8] >> 6);
-		int csmult = ((csd[9] & 0x03) << 1) | (csd[10] >> 7);
-		int rdbllen = csd[5] & 0x0F;
-		unsigned long blocks = (csize + 1) * (1UL << (csmult + 2));
-		unsigned long blocklen = 1UL << rdbllen;
-		g_sectors = blocks * (blocklen / 512);
+		unsigned long dwCsize = ((unsigned long)(abCsd[6] & 0x03) << 10) |
+		                        ((unsigned long)abCsd[7] << 2) | (abCsd[8] >> 6);
+		int nCsmult = ((abCsd[9] & 0x03) << 1) | (abCsd[10] >> 7);
+		int nRdbllen = abCsd[5] & 0x0F;
+		unsigned long dwBlocks = (dwCsize + 1) * (1UL << (nCsmult + 2));
+		unsigned long dwBlocklen = 1UL << nRdbllen;
+		g_nSectors = dwBlocks * (dwBlocklen / 512);
 	}
 }
 
 int SdInit(void)
 {
-	unsigned char r = 0xFF, ocr[4];
-	int i, v2 = 0;
+	unsigned char bResp = 0xFF, abOcr[4];
+	int i, nV2 = 0;
 
-	g_inited = 0;
-	g_byteAddr = 1;
-	g_sectors = 0;
+	g_nInited = 0;
+	g_nByteAddr = 1;
+	g_nSectors = 0;
 	SysLog(L"sd: SdInit enter");
 	if (SpiInit(BUS, CSM))
 	{
@@ -128,169 +128,169 @@ int SdInit(void)
 	SysLog(L"sd: SpiInit ok (SCIF)");
 	SpiSetSettle(SD_INIT_SETTLE); // <=400 kHz for the bring-up sequence
 
-	cs(0); // CS high during the power-up clocks
+	Cs(0); // CS high during the power-up clocks
 	for (i = 0; i < 10; i++)
-		wb(0xFF); // >= 74 clocks
-	cs(1);
+		Wb(0xFF); // >= 74 clocks
+	Cs(1);
 
-	r = sd_cmd(CMD0, 0);
-	SysLog(L"sd: CMD0 -> %02x", r);
-	if (r != 0x01)
+	bResp = SdCmd(CMD0, 0);
+	SysLog(L"sd: CMD0 -> %02x", bResp);
+	if (bResp != 0x01)
 	{
-		cs(0);
+		Cs(0);
 		return -2;
 	} // enter idle/SPI mode
 
 	{
-		unsigned char r8 = sd_cmd(CMD8, 0x000001AA); // v2 card check
-		if (r8 == 0x01)
+		unsigned char bResp8 = SdCmd(CMD8, 0x000001AA); // v2 card check
+		if (bResp8 == 0x01)
 		{
 			for (i = 0; i < 4; i++)
-				ocr[i] = rb(); // R7 trailer
-			SysLog(L"sd: CMD8 r=01 echo=%02x%02x", ocr[2], ocr[3]);
-			if (ocr[2] != 0x01 || ocr[3] != 0xAA)
+				abOcr[i] = Rb(); // R7 trailer
+			SysLog(L"sd: CMD8 r=01 echo=%02x%02x", abOcr[2], abOcr[3]);
+			if (abOcr[2] != 0x01 || abOcr[3] != 0xAA)
 			{
-				cs(0);
+				Cs(0);
 				return -3;
 			}
-			v2 = 1;
+			nV2 = 1;
 		}
 		else
-			SysLog(L"sd: CMD8 r=%02x (v1/no-CMD8)", r8);
+			SysLog(L"sd: CMD8 r=%02x (v1/no-CMD8)", bResp8);
 	}
 
 	for (i = 0; i < 20000; i++) // ACMD41 init loop
 	{
-		sd_cmd(CMD55, 0);
-		r = sd_cmd(ACMD41, v2 ? 0x40000000UL : 0); // HCS bit for v2
-		if (r == 0x00)
+		SdCmd(CMD55, 0);
+		bResp = SdCmd(ACMD41, nV2 ? 0x40000000UL : 0); // HCS bit for v2
+		if (bResp == 0x00)
 			break;
 	}
-	SysLog(L"sd: ACMD41 r=%02x iters=%d v2=%d", r, i, v2);
-	if (r != 0x00)
+	SysLog(L"sd: ACMD41 r=%02x iters=%d v2=%d", bResp, i, nV2);
+	if (bResp != 0x00)
 	{
-		cs(0);
+		Cs(0);
 		return -4;
 	}
 
-	if (v2 && sd_cmd(CMD58, 0) == 0x00) // read OCR -> CCS (bit30)
+	if (nV2 && SdCmd(CMD58, 0) == 0x00) // read OCR -> CCS (bit30)
 	{
 		for (i = 0; i < 4; i++)
-			ocr[i] = rb();
-		g_byteAddr = (ocr[0] & 0x40) ? 0 : 1; // CCS=1 -> block addressing
+			abOcr[i] = Rb();
+		g_nByteAddr = (abOcr[0] & 0x40) ? 0 : 1; // CCS=1 -> block addressing
 	}
-	SysLog(L"sd: CMD58 byteAddr=%d (1=SDSC 0=SDHC)", g_byteAddr);
-	if (g_byteAddr)
-		sd_cmd(CMD16, 512); // fix block length for SDSC
+	SysLog(L"sd: CMD58 byteAddr=%d (1=SDSC 0=SDHC)", g_nByteAddr);
+	if (g_nByteAddr)
+		SdCmd(CMD16, 512); // fix block length for SDSC
 
-	sd_read_csd();
+	SdReadCsd();
 
-	cs(0);
-	rb();
+	Cs(0);
+	Rb();
 	SpiSetSettle(SD_RUN_SETTLE); // card is up: switch to fast clock for block I/O
-	g_inited = 1;
-	SysLog(L"sd: init OK sectors=%u byteAddr=%d", g_sectors, g_byteAddr);
+	g_nInited = 1;
+	SysLog(L"sd: init OK sectors=%u byteAddr=%d", g_nSectors, g_nByteAddr);
 	{ // publish capacity to the boot screen (dcwboot reads DCBOOT)
-		unsigned long mb = g_sectors / 2048; // 512-byte sectors -> MiB
-		WCHAR s[DCB_RESLEN];
-		if (mb >= 1024)
-			wsprintfW(s, L"%u.%u GB", mb / 1024, ((mb % 1024) * 10) / 1024);
+		unsigned long dwMb = g_nSectors / 2048; // 512-byte sectors -> MiB
+		WCHAR szCap[DCB_RESLEN];
+		if (dwMb >= 1024)
+			wsprintfW(szCap, L"%u.%u GB", dwMb / 1024, ((dwMb % 1024) * 10) / 1024);
 		else
-			wsprintfW(s, L"%u MB", mb);
-		DcBootSet(DCB_STORE, DCB_OK, s);
+			wsprintfW(szCap, L"%u MB", dwMb);
+		DcBootSet(DCB_STORE, DCB_OK, szCap);
 	}
 	return 0;
 }
 
-int SdReadSectors(unsigned long lba, int count, void *buf)
+int SdReadSectors(unsigned long dwLba, int nCount, void *pvBuf)
 {
-	unsigned char *p = (unsigned char *)buf;
-	unsigned long addr;
+	unsigned char *pb = (unsigned char *)pvBuf;
+	unsigned long dwAddr;
 	int i;
 
-	if (!g_inited)
+	if (!g_nInited)
 	{
-		SysLog(L"sd: read lba=%u but !inited", lba);
+		SysLog(L"sd: read lba=%u but !inited", dwLba);
 		return -1;
 	}
-	addr = g_byteAddr ? lba * 512 : lba;
-	SysLog(L"sd: read lba=%u cnt=%d addr=%u", lba, count, addr);
-	cs(1);
-	while (count-- > 0)
+	dwAddr = g_nByteAddr ? dwLba * 512 : dwLba;
+	SysLog(L"sd: read lba=%u cnt=%d addr=%u", dwLba, nCount, dwAddr);
+	Cs(1);
+	while (nCount-- > 0)
 	{
-		unsigned char t = 0xFF, r1;
-		r1 = sd_cmd(CMD17, addr);
-		if (r1 != 0)
+		unsigned char bTok = 0xFF, bR1;
+		bR1 = SdCmd(CMD17, dwAddr);
+		if (bR1 != 0)
 		{
-			SysLog(L"sd: CMD17 lba=%u R1=%02x", lba, r1);
-			cs(0);
+			SysLog(L"sd: CMD17 lba=%u R1=%02x", dwLba, bR1);
+			Cs(0);
 			return -1;
 		}
 		for (i = 0; i < 100000; i++)
 		{
-			t = rb();
-			if (t != 0xFF)
+			bTok = Rb();
+			if (bTok != 0xFF)
 				break;
 		}
-		if (t != 0xFE)
+		if (bTok != 0xFE)
 		{
-			SysLog(L"sd: CMD17 lba=%u tok=%02x", lba, t);
-			cs(0);
+			SysLog(L"sd: CMD17 lba=%u tok=%02x", dwLba, bTok);
+			Cs(0);
 			return -1;
 		}
-		SpiRwData(BUS, 0, p, 512); // read 512 (tx NULL -> 0xFF)
-		rb();
-		rb(); // data CRC16
-		p += 512;
-		addr += g_byteAddr ? 512 : 1;
+		SpiRwData(BUS, 0, pb, 512); // read 512 (tx NULL -> 0xFF)
+		Rb();
+		Rb(); // data CRC16
+		pb += 512;
+		dwAddr += g_nByteAddr ? 512 : 1;
 	}
-	cs(0);
-	rb();
-	SysLog(L"sd: read ok lba=%u [%02x %02x %02x %02x]", lba, ((BYTE *)buf)[0], ((BYTE *)buf)[1],
-	       ((BYTE *)buf)[2], ((BYTE *)buf)[510]);
+	Cs(0);
+	Rb();
+	SysLog(L"sd: read ok lba=%u [%02x %02x %02x %02x]", dwLba, ((BYTE *)pvBuf)[0],
+	       ((BYTE *)pvBuf)[1], ((BYTE *)pvBuf)[2], ((BYTE *)pvBuf)[510]);
 	return 0;
 }
 
-int SdWriteSectors(unsigned long lba, int count, const void *buf)
+int SdWriteSectors(unsigned long dwLba, int nCount, const void *pvBuf)
 {
-	const unsigned char *p = (const unsigned char *)buf;
-	unsigned long addr;
+	const unsigned char *pb = (const unsigned char *)pvBuf;
+	unsigned long dwAddr;
 
-	if (!g_inited)
+	if (!g_nInited)
 		return -1;
-	addr = g_byteAddr ? lba * 512 : lba;
-	cs(1);
-	while (count-- > 0)
+	dwAddr = g_nByteAddr ? dwLba * 512 : dwLba;
+	Cs(1);
+	while (nCount-- > 0)
 	{
-		if (sd_cmd(CMD24, addr) != 0)
+		if (SdCmd(CMD24, dwAddr) != 0)
 		{
-			cs(0);
+			Cs(0);
 			return -1;
 		}
-		wb(0xFF);                  // 1-byte gap before token
-		wb(0xFE);                  // data start token
-		SpiRwData(BUS, p, 0, 512); // write 512
-		wb(0xFF);
-		wb(0xFF); // dummy CRC16
-		if ((rb() & 0x1F) != 0x05)
+		Wb(0xFF);                   // 1-byte gap before token
+		Wb(0xFE);                   // data start token
+		SpiRwData(BUS, pb, 0, 512); // write 512
+		Wb(0xFF);
+		Wb(0xFF); // dummy CRC16
+		if ((Rb() & 0x1F) != 0x05)
 		{
-			cs(0);
+			Cs(0);
 			return -1;
 		} // data response: 010 = accepted
-		if (sd_wait_ready())
+		if (SdWaitReady())
 		{
-			cs(0);
+			Cs(0);
 			return -1;
 		} // wait out the program-busy
-		p += 512;
-		addr += g_byteAddr ? 512 : 1;
+		pb += 512;
+		dwAddr += g_nByteAddr ? 512 : 1;
 	}
-	cs(0);
-	rb();
+	Cs(0);
+	Rb();
 	return 0;
 }
 
 unsigned long SdSectorCount(void)
 {
-	return g_sectors;
+	return g_nSectors;
 }

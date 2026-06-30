@@ -29,7 +29,7 @@ extern BOOL WINAPI InitWDMDriver(HANDLE hInst, PDRIVER_INITIALIZE pfnEntry);
 
 // ---- state -----------------------------------------------------------------------------
 static FATFS g_fs;
-static int g_afsidx = -1;
+static int g_nAfsIdx = -1;
 static HANDLE g_hVol, g_hFile, g_hFind;
 static CRITICAL_SECTION g_cs;
 static HINSTANCE g_hInst;
@@ -48,34 +48,35 @@ typedef struct
 #define UNLOCK() LeaveCriticalSection(&g_cs)
 
 // ---- helpers ---------------------------------------------------------------------------
-static int IsRoot(const WCHAR *p)
+static int IsRoot(const WCHAR *psz)
 {
-	return p == 0 || p[0] == 0 || (p[0] == L'\\' && p[1] == 0) || (p[0] == L'/' && p[1] == 0);
+	return psz == 0 || psz[0] == 0 || (psz[0] == L'\\' && psz[1] == 0) ||
+	       (psz[0] == L'/' && psz[1] == 0);
 }
 
 // case-insensitive wildcard match ('*' and '?'); used to filter f_readdir output.
-static int MatchPat(const WCHAR *pat, const WCHAR *name)
+static int MatchPat(const WCHAR *pszPat, const WCHAR *pszName)
 {
-	while (*pat)
+	while (*pszPat)
 	{
-		if (*pat == L'*')
+		if (*pszPat == L'*')
 		{
-			pat++;
-			if (!*pat)
+			pszPat++;
+			if (!*pszPat)
 				return 1;
-			while (*name)
+			while (*pszName)
 			{
-				if (MatchPat(pat, name))
+				if (MatchPat(pszPat, pszName))
 					return 1;
-				name++;
+				pszName++;
 			}
-			return MatchPat(pat, name);
+			return MatchPat(pszPat, pszName);
 		}
-		if (!*name)
+		if (!*pszName)
 			return 0;
-		if (*pat != L'?')
+		if (*pszPat != L'?')
 		{
-			WCHAR a = *pat, b = *name;
+			WCHAR a = *pszPat, b = *pszName;
 			if (a >= L'a' && a <= L'z')
 				a -= 32;
 			if (b >= L'a' && b <= L'z')
@@ -83,43 +84,43 @@ static int MatchPat(const WCHAR *pat, const WCHAR *name)
 			if (a != b)
 				return 0;
 		}
-		pat++;
-		name++;
+		pszPat++;
+		pszName++;
 	}
-	return *name == 0;
+	return *pszName == 0;
 }
 
-static void DosToFt(WORD fdate, WORD ftime, FILETIME *ft)
+static void DosToFt(WORD wFdate, WORD wFtime, FILETIME *pFt)
 {
 	SYSTEMTIME st;
 	memset(&st, 0, sizeof(st));
-	st.wYear = (WORD)(1980 + (fdate >> 9));
-	st.wMonth = (WORD)((fdate >> 5) & 0x0F);
+	st.wYear = (WORD)(1980 + (wFdate >> 9));
+	st.wMonth = (WORD)((wFdate >> 5) & 0x0F);
 	if (st.wMonth < 1)
 		st.wMonth = 1;
-	st.wDay = (WORD)(fdate & 0x1F);
+	st.wDay = (WORD)(wFdate & 0x1F);
 	if (st.wDay < 1)
 		st.wDay = 1;
-	st.wHour = (WORD)(ftime >> 11);
-	st.wMinute = (WORD)((ftime >> 5) & 0x3F);
-	st.wSecond = (WORD)((ftime & 0x1F) * 2);
-	SystemTimeToFileTime(&st, ft);
+	st.wHour = (WORD)(wFtime >> 11);
+	st.wMinute = (WORD)((wFtime >> 5) & 0x3F);
+	st.wSecond = (WORD)((wFtime & 0x1F) * 2);
+	SystemTimeToFileTime(&st, pFt);
 }
 
 // Fill a WIN32_FIND_DATAW from a FatFs FILINFO (+ its long name when present).
-static void FillFind(WIN32_FIND_DATAW *fd, FILINFO *fno, const WCHAR *lfn)
+static void FillFind(WIN32_FIND_DATAW *pFd, FILINFO *pFno, const WCHAR *pszLfn)
 {
-	const WCHAR *nm = (lfn && lfn[0]) ? lfn : fno->fname;
+	const WCHAR *pszNm = (pszLfn && pszLfn[0]) ? pszLfn : pFno->fname;
 	int i;
-	memset(fd, 0, sizeof(*fd));
-	fd->dwFileAttributes = fno->fattrib; // FatFs AM_* == Win32 FILE_ATTRIBUTE_*
-	fd->nFileSizeLow = fno->fsize;
-	DosToFt(fno->fdate, fno->ftime, &fd->ftLastWriteTime);
-	fd->ftCreationTime = fd->ftLastWriteTime;
-	fd->ftLastAccessTime = fd->ftLastWriteTime;
-	for (i = 0; i < MAX_PATH - 1 && nm[i]; i++)
-		fd->cFileName[i] = nm[i];
-	fd->cFileName[i] = 0;
+	memset(pFd, 0, sizeof(*pFd));
+	pFd->dwFileAttributes = pFno->fattrib; // FatFs AM_* == Win32 FILE_ATTRIBUTE_*
+	pFd->nFileSizeLow = pFno->fsize;
+	DosToFt(pFno->fdate, pFno->ftime, &pFd->ftLastWriteTime);
+	pFd->ftCreationTime = pFd->ftLastWriteTime;
+	pFd->ftLastAccessTime = pFd->ftLastWriteTime;
+	for (i = 0; i < MAX_PATH - 1 && pszNm[i]; i++)
+		pFd->cFileName[i] = pszNm[i];
+	pFd->cFileName[i] = 0;
 }
 
 // ---- VOLUME callbacks (17; order per the reversed PCDF table) --------------------------
@@ -129,182 +130,183 @@ static int V_NoSupport(void)
 	return 0;
 }
 
-static BOOL V_CreateDirectory(void *vol, const WCHAR *path, void *sa)
+static BOOL V_CreateDirectory(void *pvVol, const WCHAR *pszPath, void *pvSa)
 {
-	BOOL r;
-	(void)vol;
-	(void)sa;
+	BOOL bRet;
+	(void)pvVol;
+	(void)pvSa;
 	LOCK();
-	r = (f_mkdir(path) == FR_OK);
+	bRet = (f_mkdir(pszPath) == FR_OK);
 	UNLOCK();
-	return r;
+	return bRet;
 }
 
-static BOOL V_RemoveDirectory(void *vol, const WCHAR *path)
+static BOOL V_RemoveDirectory(void *pvVol, const WCHAR *pszPath)
 {
-	BOOL r;
-	(void)vol;
+	BOOL bRet;
+	(void)pvVol;
 	LOCK();
-	r = (f_unlink(path) == FR_OK);
+	bRet = (f_unlink(pszPath) == FR_OK);
 	UNLOCK();
-	return r;
+	return bRet;
 }
 
-static DWORD V_GetFileAttributes(void *vol, const WCHAR *path)
+static DWORD V_GetFileAttributes(void *pvVol, const WCHAR *pszPath)
 {
 	FILINFO fno;
-	DWORD a;
-	(void)vol;
-	SysLog(L"sd: GetAttr '%s'", path ? path : L"(null)");
-	if (IsRoot(path))
+	DWORD dwAttr;
+	(void)pvVol;
+	SysLog(L"sd: GetAttr '%s'", pszPath ? pszPath : L"(null)");
+	if (IsRoot(pszPath))
 		return FILE_ATTRIBUTE_DIRECTORY;
 	LOCK();
-	a = (f_stat(path, &fno) == FR_OK) ? fno.fattrib : 0xFFFFFFFF;
+	dwAttr = (f_stat(pszPath, &fno) == FR_OK) ? fno.fattrib : 0xFFFFFFFF;
 	UNLOCK();
-	return a;
+	return dwAttr;
 }
 
-static BOOL V_SetFileAttributes(void *vol, const WCHAR *path, DWORD attr)
+static BOOL V_SetFileAttributes(void *pvVol, const WCHAR *pszPath, DWORD dwAttr)
 {
-	BOOL r;
-	(void)vol;
+	BOOL bRet;
+	(void)pvVol;
 	LOCK();
-	r = (f_chmod(path, (BYTE)attr, AM_RDO | AM_ARC | AM_SYS | AM_HID) == FR_OK);
+	bRet = (f_chmod(pszPath, (BYTE)dwAttr, AM_RDO | AM_ARC | AM_SYS | AM_HID) == FR_OK);
 	UNLOCK();
-	return r;
+	return bRet;
 }
 
-static HANDLE V_CreateFile(void *vol, HANDLE hProc, const WCHAR *name, DWORD access, DWORD share,
-                           void *sa, DWORD creation, DWORD flags, HANDLE htmpl)
+static HANDLE V_CreateFile(void *pvVol, HANDLE hProc, const WCHAR *pszName, DWORD dwAccess,
+                           DWORD dwShare, void *pvSa, DWORD dwCreation, DWORD dwFlags, HANDLE hTmpl)
 {
-	SDFILE *f;
-	BYTE mode = 0;
+	SDFILE *pFile;
+	BYTE bMode = 0;
 	HANDLE h = INVALID_HANDLE_VALUE;
-	(void)vol;
+	(void)pvVol;
 	(void)hProc;
-	(void)share;
-	(void)sa;
-	(void)flags;
-	(void)htmpl;
-	if (access & GENERIC_READ)
-		mode |= FA_READ;
-	if (access & GENERIC_WRITE)
-		mode |= FA_WRITE;
-	switch (creation)
+	(void)dwShare;
+	(void)pvSa;
+	(void)dwFlags;
+	(void)hTmpl;
+	if (dwAccess & GENERIC_READ)
+		bMode |= FA_READ;
+	if (dwAccess & GENERIC_WRITE)
+		bMode |= FA_WRITE;
+	switch (dwCreation)
 	{
 		case CREATE_NEW:
-			mode |= FA_CREATE_NEW;
+			bMode |= FA_CREATE_NEW;
 			break;
 		case CREATE_ALWAYS:
-			mode |= FA_CREATE_ALWAYS;
+			bMode |= FA_CREATE_ALWAYS;
 			break;
 		case OPEN_EXISTING:
-			mode |= FA_OPEN_EXISTING;
+			bMode |= FA_OPEN_EXISTING;
 			break;
 		case OPEN_ALWAYS:
-			mode |= FA_OPEN_ALWAYS;
+			bMode |= FA_OPEN_ALWAYS;
 			break;
 		case TRUNCATE_EXISTING:
-			mode |= FA_CREATE_ALWAYS;
+			bMode |= FA_CREATE_ALWAYS;
 			break;
 		default:
-			mode |= FA_OPEN_EXISTING;
+			bMode |= FA_OPEN_EXISTING;
 			break;
 	}
-	f = (SDFILE *)LocalAlloc(LPTR, sizeof(SDFILE));
-	if (!f)
+	pFile = (SDFILE *)LocalAlloc(LPTR, sizeof(SDFILE));
+	if (!pFile)
 	{
 		SetLastError(ERROR_OUTOFMEMORY);
 		return INVALID_HANDLE_VALUE;
 	}
 	LOCK();
 	{
-		FRESULT fr = f_open(&f->fil, name, mode);
-		SysLog(L"sd: CreateFile '%s' acc=%x cr=%d -> f_open=%d", name ? name : L"(null)", access,
-		       creation, fr);
+		FRESULT fr = f_open(&pFile->fil, pszName, bMode);
+		SysLog(L"sd: CreateFile '%s' acc=%x cr=%d -> f_open=%d", pszName ? pszName : L"(null)",
+		       dwAccess, dwCreation, fr);
 		if (fr == FR_OK)
-			h = CreateAPIHandle(g_hFile, f);
+			h = CreateAPIHandle(g_hFile, pFile);
 	}
 	UNLOCK();
 	if (h == 0 || h == INVALID_HANDLE_VALUE)
 	{
-		LocalFree(f);
+		LocalFree(pFile);
 		SetLastError(ERROR_FILE_NOT_FOUND);
 		return INVALID_HANDLE_VALUE;
 	}
 	return h;
 }
 
-static BOOL V_DeleteFile(void *vol, const WCHAR *path)
+static BOOL V_DeleteFile(void *pvVol, const WCHAR *pszPath)
 {
-	BOOL r;
-	(void)vol;
+	BOOL bRet;
+	(void)pvVol;
 	LOCK();
-	r = (f_unlink(path) == FR_OK);
+	bRet = (f_unlink(pszPath) == FR_OK);
 	UNLOCK();
-	return r;
+	return bRet;
 }
 
-static BOOL V_MoveFile(void *vol, const WCHAR *oldp, const WCHAR *newp)
+static BOOL V_MoveFile(void *pvVol, const WCHAR *pszOldp, const WCHAR *pszNewp)
 {
-	BOOL r;
-	(void)vol;
+	BOOL bRet;
+	(void)pvVol;
 	LOCK();
-	r = (f_rename(oldp, newp) == FR_OK);
+	bRet = (f_rename(pszOldp, pszNewp) == FR_OK);
 	UNLOCK();
-	return r;
+	return bRet;
 }
 
-static HANDLE V_FindFirstFile(void *vol, HANDLE hProc, const WCHAR *spec, WIN32_FIND_DATAW *pfd)
+static HANDLE V_FindFirstFile(void *pvVol, HANDLE hProc, const WCHAR *pszSpec,
+                              WIN32_FIND_DATAW *pFd)
 {
-	SDFIND *s;
-	WCHAR dir[MAX_PATH], lfn[256];
+	SDFIND *pFind;
+	WCHAR szDir[MAX_PATH], szLfn[256];
 	FILINFO fno;
-	const WCHAR *p;
-	int i, slash = -1;
+	const WCHAR *pszPat;
+	int i, nSlash = -1;
 	HANDLE h = INVALID_HANDLE_VALUE;
-	(void)vol;
+	(void)pvVol;
 	(void)hProc;
-	for (i = 0; spec[i] && i < MAX_PATH - 1; i++)
-		if (spec[i] == L'\\' || spec[i] == L'/')
-			slash = i;
-	for (i = 0; i < slash; i++)
-		dir[i] = spec[i];
-	dir[slash > 0 ? slash : 0] = 0; // dir = path up to last slash ("" = root)
-	p = spec + slash + 1;           // pattern after last slash
+	for (i = 0; pszSpec[i] && i < MAX_PATH - 1; i++)
+		if (pszSpec[i] == L'\\' || pszSpec[i] == L'/')
+			nSlash = i;
+	for (i = 0; i < nSlash; i++)
+		szDir[i] = pszSpec[i];
+	szDir[nSlash > 0 ? nSlash : 0] = 0; // dir = path up to last slash ("" = root)
+	pszPat = pszSpec + nSlash + 1;      // pattern after last slash
 
-	s = (SDFIND *)LocalAlloc(LPTR, sizeof(SDFIND));
-	if (!s)
+	pFind = (SDFIND *)LocalAlloc(LPTR, sizeof(SDFIND));
+	if (!pFind)
 	{
 		SetLastError(ERROR_OUTOFMEMORY);
 		return INVALID_HANDLE_VALUE;
 	}
-	for (i = 0; i < 63 && p[i]; i++)
-		s->pat[i] = p[i];
-	s->pat[i] = 0;
-	if (!s->pat[0])
+	for (i = 0; i < 63 && pszPat[i]; i++)
+		pFind->pat[i] = pszPat[i];
+	pFind->pat[i] = 0;
+	if (!pFind->pat[0])
 	{
-		s->pat[0] = L'*';
-		s->pat[1] = 0;
+		pFind->pat[0] = L'*';
+		pFind->pat[1] = 0;
 	} // empty spec -> match all
 
-	SysLog(L"sd: FindFirst '%s' pat='%s'", spec ? spec : L"(null)", s->pat);
+	SysLog(L"sd: FindFirst '%s' pat='%s'", pszSpec ? pszSpec : L"(null)", pFind->pat);
 	LOCK();
 	{
-		FRESULT fr = f_opendir(&s->dir, IsRoot(dir) ? L"\\" : dir);
-		SysLog(L"sd: f_opendir('%s')=%d", IsRoot(dir) ? L"\\" : dir, fr);
+		FRESULT fr = f_opendir(&pFind->dir, IsRoot(szDir) ? L"\\" : szDir);
+		SysLog(L"sd: f_opendir('%s')=%d", IsRoot(szDir) ? L"\\" : szDir, fr);
 		if (fr == FR_OK)
 			for (;;)
 			{
-				fno.lfname = lfn;
+				fno.lfname = szLfn;
 				fno.lfsize = 256;
-				lfn[0] = 0;
-				if (f_readdir(&s->dir, &fno) != FR_OK || fno.fname[0] == 0)
+				szLfn[0] = 0;
+				if (f_readdir(&pFind->dir, &fno) != FR_OK || fno.fname[0] == 0)
 					break; // end
-				if (MatchPat(s->pat, lfn[0] ? lfn : fno.fname))
+				if (MatchPat(pFind->pat, szLfn[0] ? szLfn : fno.fname))
 				{
-					FillFind(pfd, &fno, lfn);
-					h = CreateAPIHandle(g_hFind, s);
+					FillFind(pFd, &fno, szLfn);
+					h = CreateAPIHandle(g_hFind, pFind);
 					break;
 				}
 			}
@@ -312,35 +314,35 @@ static HANDLE V_FindFirstFile(void *vol, HANDLE hProc, const WCHAR *spec, WIN32_
 	UNLOCK();
 	if (h == 0 || h == INVALID_HANDLE_VALUE)
 	{
-		f_closedir(&s->dir);
-		LocalFree(s);
+		f_closedir(&pFind->dir);
+		LocalFree(pFind);
 		SetLastError(ERROR_FILE_NOT_FOUND);
 		return INVALID_HANDLE_VALUE;
 	}
 	return h;
 }
 
-static BOOL V_GetDiskFreeSpace(void *vol, const WCHAR *path, DWORD *spc, DWORD *bps, DWORD *freecl,
-                               DWORD *totcl)
+static BOOL V_GetDiskFreeSpace(void *pvVol, const WCHAR *pszPath, DWORD *pdwSpc, DWORD *pdwBps,
+                               DWORD *pdwFreecl, DWORD *pdwTotcl)
 {
-	FATFS *fs;
-	DWORD nfree;
-	BOOL r;
-	(void)vol;
-	(void)path;
+	FATFS *pFs;
+	DWORD dwNfree;
+	BOOL bRet;
+	(void)pvVol;
+	(void)pszPath;
 	LOCK();
-	r = (f_getfree(L"", &nfree, &fs) == FR_OK);
+	bRet = (f_getfree(L"", &dwNfree, &pFs) == FR_OK);
 	UNLOCK();
-	if (!r)
+	if (!bRet)
 		return FALSE;
-	if (spc)
-		*spc = fs->csize;
-	if (bps)
-		*bps = 512;
-	if (freecl)
-		*freecl = nfree;
-	if (totcl)
-		*totcl = fs->n_fatent - 2;
+	if (pdwSpc)
+		*pdwSpc = pFs->csize;
+	if (pdwBps)
+		*pdwBps = 512;
+	if (pdwFreecl)
+		*pdwFreecl = dwNfree;
+	if (pdwTotcl)
+		*pdwTotcl = pFs->n_fatent - 2;
 	return TRUE;
 }
 
@@ -349,41 +351,41 @@ static BOOL V_GetDiskFreeSpace(void *vol, const WCHAR *path, DWORD *spc, DWORD *
 // image before paging its code sections. wsegacd (which launches \CD-ROM\DC.EXE) fills a full
 // BY_HANDLE_FILE_INFORMATION and returns TRUE; our old V_NoSupport stub returned FALSE -> the
 // loader faulted -> kernel reset. Fill attributes + size + (zero) times + dwOID like wsegacd.
-static BOOL F_GetInfo(SDFILE *f, BY_HANDLE_FILE_INFORMATION *bhfi)
+static BOOL F_GetInfo(SDFILE *pFile, BY_HANDLE_FILE_INFORMATION *pBhfi)
 {
-	DWORD sz;
-	if (!f || !bhfi)
+	DWORD dwSz;
+	if (!pFile || !pBhfi)
 	{
 		SetLastError(ERROR_INVALID_PARAMETER);
 		return FALSE;
 	}
 	LOCK();
-	sz = f_size(&f->fil);
+	dwSz = f_size(&pFile->fil);
 	UNLOCK();
-	memset(bhfi, 0, sizeof(*bhfi));
-	bhfi->dwFileAttributes = FILE_ATTRIBUTE_ARCHIVE;
-	bhfi->nFileSizeLow = sz;
-	bhfi->nNumberOfLinks = 1;
-	bhfi->dwOID = 0xFFFFFFFF;
-	SysLog(L"sd: F_GetInfo -> size=%u", sz);
+	memset(pBhfi, 0, sizeof(*pBhfi));
+	pBhfi->dwFileAttributes = FILE_ATTRIBUTE_ARCHIVE;
+	pBhfi->nFileSizeLow = dwSz;
+	pBhfi->nNumberOfLinks = 1;
+	pBhfi->dwOID = 0xFFFFFFFF;
+	SysLog(L"sd: F_GetInfo -> size=%u", dwSz);
 	return TRUE;
 }
 
 // GetFileTime (slot 8): loader may probe it; return zeroed (valid) times, TRUE.
-static BOOL F_GetFileTime(SDFILE *f, FILETIME *cre, FILETIME *acc, FILETIME *wri)
+static BOOL F_GetFileTime(SDFILE *pFile, FILETIME *pCre, FILETIME *pAcc, FILETIME *pWri)
 {
 	FILETIME z = {0, 0};
-	if (!f)
+	if (!pFile)
 	{
 		SetLastError(ERROR_INVALID_PARAMETER);
 		return FALSE;
 	}
-	if (cre)
-		*cre = z;
-	if (acc)
-		*acc = z;
-	if (wri)
-		*wri = z;
+	if (pCre)
+		*pCre = z;
+	if (pAcc)
+		*pAcc = z;
+	if (pWri)
+		*pWri = z;
 	return TRUE;
 }
 
@@ -400,177 +402,178 @@ static int F_UnsupIoctl(void)
 	return 0;
 }
 
-static BOOL F_Close(SDFILE *f)
+static BOOL F_Close(SDFILE *pFile)
 {
-	BOOL r;
-	if (!f)
+	BOOL bRet;
+	if (!pFile)
 		return FALSE;
 	SysLog(L"sd: F_Close");
 	LOCK();
-	r = (f_close(&f->fil) == FR_OK);
+	bRet = (f_close(&pFile->fil) == FR_OK);
 	UNLOCK();
-	LocalFree(f);
-	return r;
+	LocalFree(pFile);
+	return bRet;
 }
 
-static BOOL F_Read(SDFILE *f, void *buf, DWORD cb, DWORD *pcb, void *ovl)
+static BOOL F_Read(SDFILE *pFile, void *pvBuf, DWORD cb, DWORD *pcb, void *pvOvl)
 {
 	UINT br = 0;
-	BOOL r;
-	(void)ovl;
-	if (!f)
+	BOOL bRet;
+	(void)pvOvl;
+	if (!pFile)
 		return FALSE;
 	LOCK();
-	r = (f_read(&f->fil, buf, cb, &br) == FR_OK);
+	bRet = (f_read(&pFile->fil, pvBuf, cb, &br) == FR_OK);
 	UNLOCK();
 	if (pcb)
 		*pcb = br;
-	SysLog(L"sd: F_Read cb=%u -> r=%d br=%u", cb, r, br);
-	return r;
+	SysLog(L"sd: F_Read cb=%u -> r=%d br=%u", cb, bRet, br);
+	return bRet;
 }
 
-static BOOL F_Write(SDFILE *f, const void *buf, DWORD cb, DWORD *pcb, void *ovl)
+static BOOL F_Write(SDFILE *pFile, const void *pvBuf, DWORD cb, DWORD *pcb, void *pvOvl)
 {
 	UINT bw = 0;
-	BOOL r;
-	(void)ovl;
-	if (!f)
+	BOOL bRet;
+	(void)pvOvl;
+	if (!pFile)
 		return FALSE;
 	LOCK();
-	r = (f_write(&f->fil, buf, cb, &bw) == FR_OK);
+	bRet = (f_write(&pFile->fil, pvBuf, cb, &bw) == FR_OK);
 	UNLOCK();
 	if (pcb)
 		*pcb = bw;
-	return r;
+	return bRet;
 }
 
-static DWORD F_GetSize(SDFILE *f, DWORD *high)
+static DWORD F_GetSize(SDFILE *pFile, DWORD *pdwHigh)
 {
-	DWORD sz;
-	if (!f)
+	DWORD dwSz;
+	if (!pFile)
 		return 0;
 	LOCK();
-	sz = f_size(&f->fil);
+	dwSz = f_size(&pFile->fil);
 	UNLOCK();
-	if (high)
-		*high = 0;
-	SysLog(L"sd: F_GetSize -> %u", sz);
-	return sz;
+	if (pdwHigh)
+		*pdwHigh = 0;
+	SysLog(L"sd: F_GetSize -> %u", dwSz);
+	return dwSz;
 }
 
-static DWORD F_SetPointer(SDFILE *f, LONG lo, LONG *high, DWORD method)
+static DWORD F_SetPointer(SDFILE *pFile, LONG lLo, LONG *plHigh, DWORD dwMethod)
 {
-	DWORD pos;
-	(void)high;
-	if (!f)
+	DWORD dwPos;
+	(void)plHigh;
+	if (!pFile)
 		return 0xFFFFFFFF;
 	LOCK();
-	if (method == FILE_CURRENT)
-		lo += (LONG)f_tell(&f->fil);
-	else if (method == FILE_END)
-		lo += (LONG)f_size(&f->fil);
-	f_lseek(&f->fil, (DWORD)lo);
-	pos = f_tell(&f->fil);
+	if (dwMethod == FILE_CURRENT)
+		lLo += (LONG)f_tell(&pFile->fil);
+	else if (dwMethod == FILE_END)
+		lLo += (LONG)f_size(&pFile->fil);
+	f_lseek(&pFile->fil, (DWORD)lLo);
+	dwPos = f_tell(&pFile->fil);
 	UNLOCK();
-	return pos;
+	return dwPos;
 }
 
-static BOOL F_Flush(SDFILE *f)
+static BOOL F_Flush(SDFILE *pFile)
 {
-	BOOL r;
-	if (!f)
+	BOOL bRet;
+	if (!pFile)
 		return FALSE;
 	LOCK();
-	r = (f_sync(&f->fil) == FR_OK);
+	bRet = (f_sync(&pFile->fil) == FR_OK);
 	UNLOCK();
-	return r;
+	return bRet;
 }
 
-static BOOL F_SetEnd(SDFILE *f)
+static BOOL F_SetEnd(SDFILE *pFile)
 {
-	BOOL r;
-	if (!f)
+	BOOL bRet;
+	if (!pFile)
 		return FALSE;
 	LOCK();
-	r = (f_truncate(&f->fil) == FR_OK);
+	bRet = (f_truncate(&pFile->fil) == FR_OK);
 	UNLOCK();
-	return r;
+	return bRet;
 }
 
-static BOOL F_ReadSeek(SDFILE *f, void *buf, DWORD cb, DWORD *pcb, void *ovl, DWORD lo, DWORD hi)
+static BOOL F_ReadSeek(SDFILE *pFile, void *pvBuf, DWORD cb, DWORD *pcb, void *pvOvl, DWORD dwLo,
+                       DWORD dwHi)
 {
 	UINT br = 0;
-	BOOL r;
-	(void)ovl;
-	(void)hi;
-	if (!f)
+	BOOL bRet;
+	(void)pvOvl;
+	(void)dwHi;
+	if (!pFile)
 		return FALSE;
 	LOCK();
-	f_lseek(&f->fil, lo);
-	r = (f_read(&f->fil, buf, cb, &br) == FR_OK);
+	f_lseek(&pFile->fil, dwLo);
+	bRet = (f_read(&pFile->fil, pvBuf, cb, &br) == FR_OK);
 	UNLOCK();
 	if (pcb)
 		*pcb = br;
-	SysLog(L"sd: F_ReadSeek off=%u cb=%u -> r=%d br=%u", lo, cb, r, br);
-	return r;
+	SysLog(L"sd: F_ReadSeek off=%u cb=%u -> r=%d br=%u", dwLo, cb, bRet, br);
+	return bRet;
 }
 
-static BOOL F_WriteSeek(SDFILE *f, const void *buf, DWORD cb, DWORD *pcb, void *ovl, DWORD lo,
-                        DWORD hi)
+static BOOL F_WriteSeek(SDFILE *pFile, const void *pvBuf, DWORD cb, DWORD *pcb, void *pvOvl,
+                        DWORD dwLo, DWORD dwHi)
 {
 	UINT bw = 0;
-	BOOL r;
-	(void)ovl;
-	(void)hi;
-	if (!f)
+	BOOL bRet;
+	(void)pvOvl;
+	(void)dwHi;
+	if (!pFile)
 		return FALSE;
 	LOCK();
-	f_lseek(&f->fil, lo);
-	r = (f_write(&f->fil, buf, cb, &bw) == FR_OK);
+	f_lseek(&pFile->fil, dwLo);
+	bRet = (f_write(&pFile->fil, pvBuf, cb, &bw) == FR_OK);
 	UNLOCK();
 	if (pcb)
 		*pcb = bw;
-	return r;
+	return bRet;
 }
 
 // ---- FIND callbacks (3; order per the reversed FCDF table) -----------------------------
-static BOOL S_Close(SDFIND *s)
+static BOOL S_Close(SDFIND *pFind)
 {
-	if (!s)
+	if (!pFind)
 		return FALSE;
 	LOCK();
-	f_closedir(&s->dir);
+	f_closedir(&pFind->dir);
 	UNLOCK();
-	LocalFree(s);
+	LocalFree(pFind);
 	return TRUE;
 }
 
-static BOOL S_Next(SDFIND *s, WIN32_FIND_DATAW *pfd)
+static BOOL S_Next(SDFIND *pFind, WIN32_FIND_DATAW *pFd)
 {
-	WCHAR lfn[256];
+	WCHAR szLfn[256];
 	FILINFO fno;
-	BOOL r = FALSE;
-	if (!s)
+	BOOL bRet = FALSE;
+	if (!pFind)
 		return FALSE;
 	LOCK();
 	for (;;)
 	{
-		fno.lfname = lfn;
+		fno.lfname = szLfn;
 		fno.lfsize = 256;
-		lfn[0] = 0;
-		if (f_readdir(&s->dir, &fno) != FR_OK || fno.fname[0] == 0)
+		szLfn[0] = 0;
+		if (f_readdir(&pFind->dir, &fno) != FR_OK || fno.fname[0] == 0)
 			break;
-		if (MatchPat(s->pat, lfn[0] ? lfn : fno.fname))
+		if (MatchPat(pFind->pat, szLfn[0] ? szLfn : fno.fname))
 		{
-			FillFind(pfd, &fno, lfn);
-			r = TRUE;
+			FillFind(pFd, &fno, szLfn);
+			bRet = TRUE;
 			break;
 		}
 	}
 	UNLOCK();
-	if (!r)
+	if (!bRet)
 		SetLastError(ERROR_NO_MORE_FILES);
-	return r;
+	return bRet;
 }
 
 // ---- API-set method + signature tables (exact slot order + sigs from the reverse) ------
@@ -628,11 +631,11 @@ static void FsdInit(void)
 
 	f_mount(&g_fs, L"", 0); // lazy: the disk is initialised on first access
 
-	g_afsidx = RegisterAFSName(L"External Storage");
-	if (g_afsidx >= 0)
+	g_nAfsIdx = RegisterAFSName(L"External Storage");
+	if (g_nAfsIdx >= 0)
 	{
-		BOOL r = RegisterAFS(g_afsidx, g_hVol, 1, 4); // dwData unused (single volume)
-		SysLog(L"sd: FsdInit afs=%d RegisterAFS=%d", g_afsidx, r);
+		BOOL bRet = RegisterAFS(g_nAfsIdx, g_hVol, 1, 4); // dwData unused (single volume)
+		SysLog(L"sd: FsdInit afs=%d RegisterAFS=%d", g_nAfsIdx, bRet);
 	}
 	else
 		SysLog(L"sd: RegisterAFSName failed");
@@ -646,10 +649,10 @@ static NTSTATUS DriverEntry(PDRIVER_OBJECT drv, PUNICODE_STRING reg)
 	return 0; // STATUS_SUCCESS
 }
 
-BOOL WINAPI DllMain(HANDLE hInst, DWORD reason, LPVOID reserved)
+BOOL WINAPI DllMain(HANDLE hInst, DWORD dwReason, LPVOID pvReserved)
 {
-	(void)reserved;
-	if (reason == DLL_PROCESS_ATTACH)
+	(void)pvReserved;
+	if (dwReason == DLL_PROCESS_ATTACH)
 	{
 		g_hInst = (HINSTANCE)hInst;
 		return InitWDMDriver(hInst, DriverEntry);
