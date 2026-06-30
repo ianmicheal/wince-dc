@@ -4,35 +4,35 @@
 //
 #include "dcboot.h"
 
-static DcBootShared *g_db;
-static HANDLE g_map;
+static DcBootShared *g_pDb;
+static HANDLE g_hMap;
 
 DcBootShared *DcBootMap(int create)
 {
-	if (g_db)
-		return g_db;
-	g_map = CreateFileMappingW((HANDLE)-1, NULL, PAGE_READWRITE, 0, sizeof(DcBootShared),
-	                           DCBOOT_SECTION);
-	if (!g_map)
+	if (g_pDb)
+		return g_pDb;
+	g_hMap = CreateFileMappingW((HANDLE)-1, NULL, PAGE_READWRITE, 0, sizeof(DcBootShared),
+	                            DCBOOT_SECTION);
+	if (!g_hMap)
 		return NULL;
-	g_db = (DcBootShared *)MapViewOfFile(g_map, FILE_MAP_WRITE, 0, 0, sizeof(DcBootShared));
-	if (g_db && create && g_db->magic != DCBOOT_MAGIC)
-		g_db->magic = DCBOOT_MAGIC;
-	return g_db;
+	g_pDb = (DcBootShared *)MapViewOfFile(g_hMap, FILE_MAP_WRITE, 0, 0, sizeof(DcBootShared));
+	if (g_pDb && create && g_pDb->magic != DCBOOT_MAGIC)
+		g_pDb->magic = DCBOOT_MAGIC;
+	return g_pDb;
 }
 
 void DcBootSet(int stage, int state, const WCHAR *result)
 {
-	DcBootShared *d = DcBootMap(1);
+	DcBootShared *pDb = DcBootMap(1);
 	int i;
-	if (!d || stage < 0 || stage >= DCB_STAGES)
+	if (!pDb || stage < 0 || stage >= DCB_STAGES)
 		return;
 	if (result)
 	{
-		WCHAR *r = d->result[stage];
+		WCHAR *pszRes = pDb->result[stage];
 		for (i = 0; i < DCB_RESLEN - 1 && result[i]; i++)
-			r[i] = result[i];
-		r[i] = 0;
+			pszRes[i] = result[i];
+		pszRes[i] = 0;
 	}
-	d->state[stage] = state; // publish state last
+	pDb->state[stage] = state; // publish state last
 }

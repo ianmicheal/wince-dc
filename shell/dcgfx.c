@@ -42,52 +42,52 @@ typedef struct
 #define QUAD_MAX  16384 // hard ceiling (WORD index limit); far above any real scene
 
 static HWND s_hwnd = NULL;
-static LPDIRECTDRAW s_dd = NULL;
-static LPDIRECTDRAWSURFACE s_primary = NULL;
-static LPDIRECTDRAWSURFACE s_back = NULL;
-static BOOL s_useFlip = FALSE;
-static LPDIRECT3D2 s_d3d = NULL;
-static LPDIRECT3DDEVICE2 s_dev = NULL;
-static LPDIRECT3DVIEWPORT2 s_vp = NULL;
-static BOOL s_d3dOk = FALSE;
+static LPDIRECTDRAW s_pDd = NULL;
+static LPDIRECTDRAWSURFACE s_pPrimary = NULL;
+static LPDIRECTDRAWSURFACE s_pBack = NULL;
+static BOOL s_bUseFlip = FALSE;
+static LPDIRECT3D2 s_pD3d = NULL;
+static LPDIRECT3DDEVICE2 s_pDev = NULL;
+static LPDIRECT3DVIEWPORT2 s_pVp = NULL;
+static BOOL s_bD3dOk = FALSE;
 
-static LPDIRECTDRAWSURFACE s_atlasSurf = NULL; // VRAM atlas (kept alive while bound)
-static LPDIRECT3DTEXTURE2 s_atlasTex = NULL;
+static LPDIRECTDRAWSURFACE s_pAtlasSurf = NULL; // VRAM atlas (kept alive while bound)
+static LPDIRECT3DTEXTURE2 s_pAtlasTex = NULL;
 static D3DTEXTUREHANDLE s_hAtlas = 0;
 
 // Page layer (browser): GWES framebuffer wrap -> VRAM texture quad. See GfxInitPageLayer.
-static LPDIRECTDRAWSURFACE s_gdiSurf = NULL;  // system-mem surface aliasing the GDI framebuffer
-static LPDIRECTDRAWSURFACE s_pageSurf = NULL; // VRAM texture the page is blitted into
-static LPDIRECT3DTEXTURE2 s_pageTex = NULL;
+static LPDIRECTDRAWSURFACE s_pGdiSurf = NULL;  // system-mem surface aliasing the GDI framebuffer
+static LPDIRECTDRAWSURFACE s_pPageSurf = NULL; // VRAM texture the page is blitted into
+static LPDIRECT3DTEXTURE2 s_pPageTex = NULL;
 static D3DTEXTUREHANDLE s_hPage = 0;
 #define PAGE_TW 1024 // page texture is pow2 and >= 640x480
 #define PAGE_TH 512
 
 // Retained quad list (the scene), replayed every frame; grown on demand. Indices are base-relative.
-static D3DTLVERTEX *s_vb;
-static WORD *s_ib;
-static BYTE *s_qtex; // tex: 0=solid 1=atlas 2=page
-static int s_cap, s_nQuad;
+static D3DTLVERTEX *s_pVb;
+static WORD *s_pIb;
+static BYTE *s_pQtex; // tex: 0=solid 1=atlas 2=page
+static int s_nCap, s_nQuad;
 
 // Desktop cache: a cached vertex SUB-LIST (not pixels) prepended each frame; also grown on demand.
-static D3DTLVERTEX *s_dvb;
-static WORD *s_dib;
-static BYTE *s_dtex;
-static int s_dcap, s_dQuad;
-static BOOL s_recDesk = FALSE;
+static D3DTLVERTEX *s_pDvb;
+static WORD *s_pDib;
+static BYTE *s_pDtex;
+static int s_nDcap, s_nDQuad;
+static BOOL s_bRecDesk = FALSE;
 
 typedef struct
 {
 	float u0, v0, u1, v1;
 	BYTE adv;
 } GlyphUV;
-static GlyphUV s_glyph[3][GN];
-static BOOL s_glyphReady = FALSE;
+static GlyphUV s_aGlyph[3][GN];
+static BOOL s_bGlyphReady = FALSE;
 typedef struct
 {
 	float u0, v0, u1, v1;
 } RectUV;
-static RectUV s_iconUV[ICON_COUNT][2]; // [0]=16px, [1]=32px
+static RectUV s_aIconUV[ICON_COUNT][2]; // [0]=16px, [1]=32px
 
 HFONT g_FontUI = NULL;
 HFONT g_FontBold = NULL;
@@ -103,18 +103,18 @@ static D3DCOLOR ToArgb(COLORREF c)
 	                  GetBValue(c));
 }
 
-static HFONT MakeFont(int height, int weight)
+static HFONT MakeFont(int nHeight, int nWeight)
 {
 	LOGFONTW lf;
 	memset(&lf, 0, sizeof(lf));
-	lf.lfHeight = -height;
-	lf.lfWeight = weight;
+	lf.lfHeight = -nHeight;
+	lf.lfWeight = nWeight;
 	lstrcpyW(lf.lfFaceName, L"Arial");
 	return CreateFontIndirectW(&lf);
 }
 
 // 16x16 icons as ASCII art (' ' = transparent).
-static const char *s_iconArt[ICON_COUNT][16] = {
+static const char *s_aIconArt[ICON_COUNT][16] = {
     {// ICON_COMPUTER
      "", " KKKKKKKKKK", " KssssssssK", " KssssssssK", " KssssssssK", " KssssssssK", " KssssssssK",
      " KKKKKKKKKK", "    KKKK", "   KKKKKK", "  KLLLLLLK", "  KKKKKKKK", "", "", "", ""},
@@ -179,143 +179,143 @@ static COLORREF PalColor(char c)
 }
 
 // 565 -> ARGB4444; the color key becomes fully transparent.
-static WORD Conv4444(WORD px565)
+static WORD Conv4444(WORD wPx565)
 {
 	int r5, g6, b5;
-	if (px565 == KEY)
+	if (wPx565 == KEY)
 		return 0x0000;
-	r5 = (px565 >> 11) & 0x1F;
-	g6 = (px565 >> 5) & 0x3F;
-	b5 = px565 & 0x1F;
+	r5 = (wPx565 >> 11) & 0x1F;
+	g6 = (wPx565 >> 5) & 0x3F;
+	b5 = wPx565 & 0x1F;
 	return (WORD)(0xF000 | ((r5 >> 1) << 8) | ((g6 >> 2) << 4) | (b5 >> 1));
 }
 
 // --- clip rect (compositor-side window clipping) --------------------------------
-static float s_clipX0, s_clipY0, s_clipX1, s_clipY1;
-static int s_clipOn = 0;
+static float s_fClipX0, s_fClipY0, s_fClipX1, s_fClipY1;
+static int s_nClipOn = 0;
 void GfxSetClip(int x0, int y0, int x1, int y1)
 {
-	s_clipX0 = (float)x0;
-	s_clipY0 = (float)y0;
-	s_clipX1 = (float)x1;
-	s_clipY1 = (float)y1;
-	s_clipOn = 1;
+	s_fClipX0 = (float)x0;
+	s_fClipY0 = (float)y0;
+	s_fClipX1 = (float)x1;
+	s_fClipY1 = (float)y1;
+	s_nClipOn = 1;
 }
 void GfxClearClip(void)
 {
-	s_clipOn = 0;
+	s_nClipOn = 0;
 }
 
 // --- dynamic quad arrays --------------------------------------------------------
 // Grow the three parallel arrays (verts / indices / tex-flags) to hold >= need quads, preserving
 // the first `keep`. Doubling from QUAD_INIT -> amortized O(1) across a frame. Returns 0 only at the
 // QUAD_MAX ceiling or on OOM (PushQuad then drops, which no real scene reaches).
-static int GrowQuads(D3DTLVERTEX **vb, WORD **ib, BYTE **qt, int *cap, int need, int keep)
+static int GrowQuads(D3DTLVERTEX **pVb, WORD **pIb, BYTE **pQt, int *pCap, int nNeed, int nKeep)
 {
 	int nc;
-	D3DTLVERTEX *nvb;
-	WORD *nib;
-	BYTE *nqt;
-	if (need <= *cap)
+	D3DTLVERTEX *pNvb;
+	WORD *pNib;
+	BYTE *pNqt;
+	if (nNeed <= *pCap)
 		return 1;
-	if (need > QUAD_MAX)
+	if (nNeed > QUAD_MAX)
 		return 0;
-	nc = *cap ? *cap : QUAD_INIT;
-	while (nc < need)
+	nc = *pCap ? *pCap : QUAD_INIT;
+	while (nc < nNeed)
 		nc <<= 1;
 	if (nc > QUAD_MAX)
 		nc = QUAD_MAX;
-	nvb = (D3DTLVERTEX *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 4 * sizeof(D3DTLVERTEX));
-	nib = (WORD *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 6 * sizeof(WORD));
-	nqt = (BYTE *)LocalAlloc(LMEM_FIXED, (DWORD)nc);
-	if (!nvb || !nib || !nqt)
+	pNvb = (D3DTLVERTEX *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 4 * sizeof(D3DTLVERTEX));
+	pNib = (WORD *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 6 * sizeof(WORD));
+	pNqt = (BYTE *)LocalAlloc(LMEM_FIXED, (DWORD)nc);
+	if (!pNvb || !pNib || !pNqt)
 	{
-		if (nvb)
-			LocalFree(nvb);
-		if (nib)
-			LocalFree(nib);
-		if (nqt)
-			LocalFree(nqt);
+		if (pNvb)
+			LocalFree(pNvb);
+		if (pNib)
+			LocalFree(pNib);
+		if (pNqt)
+			LocalFree(pNqt);
 		return 0;
 	}
-	if (keep > 0 && *vb)
+	if (nKeep > 0 && *pVb)
 	{
-		memcpy(nvb, *vb, (DWORD)keep * 4 * sizeof(D3DTLVERTEX));
-		memcpy(nib, *ib, (DWORD)keep * 6 * sizeof(WORD));
-		memcpy(nqt, *qt, (DWORD)keep);
+		memcpy(pNvb, *pVb, (DWORD)nKeep * 4 * sizeof(D3DTLVERTEX));
+		memcpy(pNib, *pIb, (DWORD)nKeep * 6 * sizeof(WORD));
+		memcpy(pNqt, *pQt, (DWORD)nKeep);
 	}
-	if (*vb)
-		LocalFree(*vb);
-	if (*ib)
-		LocalFree(*ib);
-	if (*qt)
-		LocalFree(*qt);
-	*vb = nvb;
-	*ib = nib;
-	*qt = nqt;
-	*cap = nc;
+	if (*pVb)
+		LocalFree(*pVb);
+	if (*pIb)
+		LocalFree(*pIb);
+	if (*pQt)
+		LocalFree(*pQt);
+	*pVb = pNvb;
+	*pIb = pNib;
+	*pQt = pNqt;
+	*pCap = nc;
 	return 1;
 }
 
 // Reclaim the live scene after it has stayed small: realloc DOWN to fit `want` (no copy - the frame
 // is drawn and the next rebuilds from scratch). No-op if it wouldn't shrink or if the alloc fails.
-static void ShrinkScene(int want)
+static void ShrinkScene(int nWant)
 {
 	int nc = QUAD_INIT;
-	D3DTLVERTEX *nvb;
-	WORD *nib;
-	BYTE *nqt;
-	while (nc < want)
+	D3DTLVERTEX *pNvb;
+	WORD *pNib;
+	BYTE *pNqt;
+	while (nc < nWant)
 		nc <<= 1;
-	if (nc >= s_cap)
+	if (nc >= s_nCap)
 		return;
-	nvb = (D3DTLVERTEX *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 4 * sizeof(D3DTLVERTEX));
-	nib = (WORD *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 6 * sizeof(WORD));
-	nqt = (BYTE *)LocalAlloc(LMEM_FIXED, (DWORD)nc);
-	if (!nvb || !nib || !nqt)
+	pNvb = (D3DTLVERTEX *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 4 * sizeof(D3DTLVERTEX));
+	pNib = (WORD *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 6 * sizeof(WORD));
+	pNqt = (BYTE *)LocalAlloc(LMEM_FIXED, (DWORD)nc);
+	if (!pNvb || !pNib || !pNqt)
 	{
-		if (nvb)
-			LocalFree(nvb);
-		if (nib)
-			LocalFree(nib);
-		if (nqt)
-			LocalFree(nqt);
+		if (pNvb)
+			LocalFree(pNvb);
+		if (pNib)
+			LocalFree(pNib);
+		if (pNqt)
+			LocalFree(pNqt);
 		return;
 	}
-	if (s_vb)
-		LocalFree(s_vb);
-	if (s_ib)
-		LocalFree(s_ib);
-	if (s_qtex)
-		LocalFree(s_qtex);
-	s_vb = nvb;
-	s_ib = nib;
-	s_qtex = nqt;
-	s_cap = nc;
+	if (s_pVb)
+		LocalFree(s_pVb);
+	if (s_pIb)
+		LocalFree(s_pIb);
+	if (s_pQtex)
+		LocalFree(s_pQtex);
+	s_pVb = pNvb;
+	s_pIb = pNib;
+	s_pQtex = pNqt;
+	s_nCap = nc;
 }
 
 // --- quad list ------------------------------------------------------------------
 static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0, float u1, float v1,
-                     D3DCOLOR col, BYTE tex)
+                     D3DCOLOR dwCol, BYTE bTex)
 {
-	D3DTLVERTEX *v;
-	WORD *ix;
-	int b, q;
-	if (!GrowQuads(&s_vb, &s_ib, &s_qtex, &s_cap, s_nQuad + 1, s_nQuad))
+	D3DTLVERTEX *pV;
+	WORD *pIx;
+	int nBase, nIdx;
+	if (!GrowQuads(&s_pVb, &s_pIb, &s_pQtex, &s_nCap, s_nQuad + 1, s_nQuad))
 		return; // only at the ceiling
 	// Software clip to the active clip rect, adjusting UVs so textured quads (glyphs/icons)
 	// clip cleanly instead of spilling outside a window's client area.
-	if (s_clipOn)
+	if (s_nClipOn)
 	{
 		float cx0 = x0, cy0 = y0, cx1 = x1, cy1 = y1;
-		if (cx0 < s_clipX0)
-			cx0 = s_clipX0;
-		if (cy0 < s_clipY0)
-			cy0 = s_clipY0;
-		if (cx1 > s_clipX1)
-			cx1 = s_clipX1;
-		if (cy1 > s_clipY1)
-			cy1 = s_clipY1;
+		if (cx0 < s_fClipX0)
+			cx0 = s_fClipX0;
+		if (cy0 < s_fClipY0)
+			cy0 = s_fClipY0;
+		if (cx1 > s_fClipX1)
+			cx1 = s_fClipX1;
+		if (cy1 > s_fClipY1)
+			cy1 = s_fClipY1;
 		if (cx1 <= cx0 || cy1 <= cy0)
 			return;             // fully outside
 		if (x1 > x0 && y1 > y0) // re-map UVs to the clipped extent
@@ -333,49 +333,49 @@ static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0,
 		x1 = cx1;
 		y1 = cy1;
 	}
-	b = s_nQuad * 4;
-	v = &s_vb[b];
-	v[0].sx = x0;
-	v[0].sy = y0;
-	v[0].sz = 0;
-	v[0].rhw = 1;
-	v[0].color = col;
-	v[0].specular = 0;
-	v[0].tu = u0;
-	v[0].tv = v0;
-	v[1].sx = x1;
-	v[1].sy = y0;
-	v[1].sz = 0;
-	v[1].rhw = 1;
-	v[1].color = col;
-	v[1].specular = 0;
-	v[1].tu = u1;
-	v[1].tv = v0;
-	v[2].sx = x0;
-	v[2].sy = y1;
-	v[2].sz = 0;
-	v[2].rhw = 1;
-	v[2].color = col;
-	v[2].specular = 0;
-	v[2].tu = u0;
-	v[2].tv = v1;
-	v[3].sx = x1;
-	v[3].sy = y1;
-	v[3].sz = 0;
-	v[3].rhw = 1;
-	v[3].color = col;
-	v[3].specular = 0;
-	v[3].tu = u1;
-	v[3].tv = v1;
-	q = s_nQuad * 6;
-	ix = &s_ib[q];
-	ix[0] = (WORD)b;
-	ix[1] = (WORD)(b + 1);
-	ix[2] = (WORD)(b + 2);
-	ix[3] = (WORD)(b + 1);
-	ix[4] = (WORD)(b + 3);
-	ix[5] = (WORD)(b + 2);
-	s_qtex[s_nQuad] = tex;
+	nBase = s_nQuad * 4;
+	pV = &s_pVb[nBase];
+	pV[0].sx = x0;
+	pV[0].sy = y0;
+	pV[0].sz = 0;
+	pV[0].rhw = 1;
+	pV[0].color = dwCol;
+	pV[0].specular = 0;
+	pV[0].tu = u0;
+	pV[0].tv = v0;
+	pV[1].sx = x1;
+	pV[1].sy = y0;
+	pV[1].sz = 0;
+	pV[1].rhw = 1;
+	pV[1].color = dwCol;
+	pV[1].specular = 0;
+	pV[1].tu = u1;
+	pV[1].tv = v0;
+	pV[2].sx = x0;
+	pV[2].sy = y1;
+	pV[2].sz = 0;
+	pV[2].rhw = 1;
+	pV[2].color = dwCol;
+	pV[2].specular = 0;
+	pV[2].tu = u0;
+	pV[2].tv = v1;
+	pV[3].sx = x1;
+	pV[3].sy = y1;
+	pV[3].sz = 0;
+	pV[3].rhw = 1;
+	pV[3].color = dwCol;
+	pV[3].specular = 0;
+	pV[3].tu = u1;
+	pV[3].tv = v1;
+	nIdx = s_nQuad * 6;
+	pIx = &s_pIb[nIdx];
+	pIx[0] = (WORD)nBase;
+	pIx[1] = (WORD)(nBase + 1);
+	pIx[2] = (WORD)(nBase + 2);
+	pIx[3] = (WORD)(nBase + 1);
+	pIx[4] = (WORD)(nBase + 3);
+	pIx[5] = (WORD)(nBase + 2);
+	s_pQtex[s_nQuad] = bTex;
 	s_nQuad++;
 }
 
@@ -383,16 +383,16 @@ static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0,
 static void BuildAtlas(void)
 {
 	DDSURFACEDESC sd, ld, lt;
-	LPDIRECTDRAWSURFACE stg = NULL, tmp = NULL, dst = NULL;
-	LPDIRECT3DTEXTURE2 stgTex = NULL;
-	HFONT fonts[3];
+	LPDIRECTDRAWSURFACE pStg = NULL, pTmp = NULL, pDst = NULL;
+	LPDIRECT3DTEXTURE2 pStgTex = NULL;
+	HFONT aFonts[3];
 	HDC hdc;
-	BYTE *ab;
-	int ap, id, x, y, sx, sy, scale, f, c, cols, n;
+	BYTE *pAb;
+	int nAp, id, x, y, sx, sy, scale, f, c, nCols, n;
 
-	s_glyphReady = FALSE;
+	s_bGlyphReady = FALSE;
 	s_hAtlas = 0;
-	if (!s_dd || !s_dev)
+	if (!s_pDd || !s_pDev)
 		return;
 
 	memset(&sd, 0, sizeof(sd));
@@ -408,7 +408,7 @@ static void BuildAtlas(void)
 	sd.ddpfPixelFormat.dwGBitMask = 0x00F0;
 	sd.ddpfPixelFormat.dwBBitMask = 0x000F;
 	sd.ddpfPixelFormat.dwRGBAlphaBitMask = 0xF000;
-	if (IDirectDraw_CreateSurface(s_dd, &sd, &stg, NULL) != DD_OK || !stg)
+	if (IDirectDraw_CreateSurface(s_pDd, &sd, &pStg, NULL) != DD_OK || !pStg)
 	{
 		OutputDebugStringW(L"atlas: staging create FAIL\r\n");
 		return;
@@ -417,47 +417,47 @@ static void BuildAtlas(void)
 	// icons -> atlas (16px row at y=144, 32px row at y=160)
 	memset(&ld, 0, sizeof(ld));
 	ld.dwSize = sizeof(ld);
-	if (IDirectDrawSurface_Lock(stg, NULL, &ld, DDLOCK_WAIT, NULL) != DD_OK)
+	if (IDirectDrawSurface_Lock(pStg, NULL, &ld, DDLOCK_WAIT, NULL) != DD_OK)
 	{
-		IDirectDrawSurface_Release(stg);
+		IDirectDrawSurface_Release(pStg);
 		return;
 	}
-	ab = (BYTE *)ld.lpSurface;
-	ap = ld.lPitch;
+	pAb = (BYTE *)ld.lpSurface;
+	nAp = ld.lPitch;
 	for (y = 0; y < ATLAS_DIM; y++)
-		memset(ab + y * ap, 0, ATLAS_DIM * 2);
+		memset(pAb + y * nAp, 0, ATLAS_DIM * 2);
 	for (id = 0; id < ICON_COUNT; id++)
 		for (scale = 1; scale <= 2; scale++)
 		{
 			int dim = 16 * scale, cx = (scale == 1) ? id * 16 : id * 32,
 			    cy = (scale == 1) ? 144 : 160;
-			RectUV *u = &s_iconUV[id][scale - 1];
-			u->u0 = cx / (float)ATLAS_DIM;
-			u->v0 = cy / (float)ATLAS_DIM;
-			u->u1 = (cx + dim) / (float)ATLAS_DIM;
-			u->v1 = (cy + dim) / (float)ATLAS_DIM;
+			RectUV *pU = &s_aIconUV[id][scale - 1];
+			pU->u0 = cx / (float)ATLAS_DIM;
+			pU->v0 = cy / (float)ATLAS_DIM;
+			pU->u1 = (cx + dim) / (float)ATLAS_DIM;
+			pU->v1 = (cy + dim) / (float)ATLAS_DIM;
 			for (y = 0; y < 16; y++)
 			{
-				const char *row = s_iconArt[id][y];
-				for (n = 0; row[n]; n++)
+				const char *pszRow = s_aIconArt[id][y];
+				for (n = 0; pszRow[n]; n++)
 					;
 				for (x = 0; x < 16; x++)
 				{
-					WORD t = Conv4444(ToRgb565(PalColor((x < n) ? row[x] : ' ')));
+					WORD t = Conv4444(ToRgb565(PalColor((x < n) ? pszRow[x] : ' ')));
 					for (sy = 0; sy < scale; sy++)
 						for (sx = 0; sx < scale; sx++)
-							*((WORD *)(ab + (cy + y * scale + sy) * ap) + (cx + x * scale + sx)) =
+							*((WORD *)(pAb + (cy + y * scale + sy) * nAp) + (cx + x * scale + sx)) =
 							    t;
 				}
 			}
 		}
-	IDirectDrawSurface_Unlock(stg, NULL);
+	IDirectDrawSurface_Unlock(pStg, NULL);
 
 	// glyphs: render the 3 fonts to a temp 565 surface, read coverage -> atlas alpha
-	cols = ATLAS_DIM / 16;
-	fonts[0] = g_FontUI;
-	fonts[1] = g_FontBold;
-	fonts[2] = g_FontTitle;
+	nCols = ATLAS_DIM / 16;
+	aFonts[0] = g_FontUI;
+	aFonts[1] = g_FontBold;
+	aFonts[2] = g_FontTitle;
 	memset(&sd, 0, sizeof(sd));
 	sd.dwSize = sizeof(sd);
 	sd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
@@ -470,78 +470,79 @@ static void BuildAtlas(void)
 	sd.ddpfPixelFormat.dwRBitMask = 0xF800;
 	sd.ddpfPixelFormat.dwGBitMask = 0x07E0;
 	sd.ddpfPixelFormat.dwBBitMask = 0x001F;
-	if (IDirectDraw_CreateSurface(s_dd, &sd, &tmp, NULL) == DD_OK && tmp)
+	if (IDirectDraw_CreateSurface(s_pDd, &sd, &pTmp, NULL) == DD_OK && pTmp)
 	{
 		memset(&lt, 0, sizeof(lt));
 		lt.dwSize = sizeof(lt);
-		if (IDirectDrawSurface_Lock(tmp, NULL, &lt, DDLOCK_WAIT, NULL) == DD_OK)
+		if (IDirectDrawSurface_Lock(pTmp, NULL, &lt, DDLOCK_WAIT, NULL) == DD_OK)
 		{
 			for (y = 0; y < 160; y++)
 				memset((BYTE *)lt.lpSurface + y * lt.lPitch, 0, ATLAS_DIM * 2);
-			IDirectDrawSurface_Unlock(tmp, NULL);
+			IDirectDrawSurface_Unlock(pTmp, NULL);
 		}
-		if (IDirectDrawSurface_GetDC(tmp, &hdc) == DD_OK && hdc)
+		if (IDirectDrawSurface_GetDC(pTmp, &hdc) == DD_OK && hdc)
 		{
 			SetBkColor(hdc, RGB(0, 0, 0));
 			SetTextColor(hdc, RGB(255, 255, 255));
 			SetBkMode(hdc, OPAQUE);
 			for (f = 0; f < 3; f++)
 			{
-				SelectObject(hdc, fonts[f]);
+				SelectObject(hdc, aFonts[f]);
 				for (c = 0; c < GN; c++)
 				{
 					int idx = f * GN + c;
 					WCHAR ch = (WCHAR)(GFIRST + c);
-					ExtTextOutW(hdc, (idx % cols) * 16, (idx / cols) * 16, 0, NULL, &ch, 1, NULL);
+					ExtTextOutW(hdc, (idx % nCols) * 16, (idx / nCols) * 16, 0, NULL, &ch, 1, NULL);
 				}
 			}
-			IDirectDrawSurface_ReleaseDC(tmp, hdc);
+			IDirectDrawSurface_ReleaseDC(pTmp, hdc);
 		}
 		memset(&ld, 0, sizeof(ld));
 		ld.dwSize = sizeof(ld);
 		memset(&lt, 0, sizeof(lt));
 		lt.dwSize = sizeof(lt);
-		if (IDirectDrawSurface_Lock(stg, NULL, &ld, DDLOCK_WAIT, NULL) == DD_OK)
+		if (IDirectDrawSurface_Lock(pStg, NULL, &ld, DDLOCK_WAIT, NULL) == DD_OK)
 		{
-			ab = (BYTE *)ld.lpSurface;
-			ap = ld.lPitch;
-			if (IDirectDrawSurface_Lock(tmp, NULL, &lt, DDLOCK_WAIT, NULL) == DD_OK)
+			pAb = (BYTE *)ld.lpSurface;
+			nAp = ld.lPitch;
+			if (IDirectDrawSurface_Lock(pTmp, NULL, &lt, DDLOCK_WAIT, NULL) == DD_OK)
 			{
-				BYTE *tb = (BYTE *)lt.lpSurface;
-				int tp = lt.lPitch;
+				BYTE *pTb = (BYTE *)lt.lpSurface;
+				int nTp = lt.lPitch;
 				for (f = 0; f < 3; f++)
 					for (c = 0; c < GN; c++)
 					{
-						int idx = f * GN + c, gx = (idx % cols) * 16, gy = (idx / cols) * 16, w = 0;
-						GlyphUV *g = &s_glyph[f][c];
+						int idx = f * GN + c, gx = (idx % nCols) * 16, gy = (idx / nCols) * 16,
+						    w = 0;
+						GlyphUV *pG = &s_aGlyph[f][c];
 						for (y = 0; y < 16; y++)
 						{
-							WORD *tr = (WORD *)(tb + (gy + y) * tp);
-							WORD *ar = (WORD *)(ab + (gy + y) * ap);
+							WORD *pTr = (WORD *)(pTb + (gy + y) * nTp);
+							WORD *pAr = (WORD *)(pAb + (gy + y) * nAp);
 							for (x = 0; x < 16; x++)
 							{
 								int a4 =
-								    ((tr[gx + x] >> 11) & 0x1F) >> 1; // luminance -> 4-bit alpha
+								    ((pTr[gx + x] >> 11) & 0x1F) >> 1; // luminance -> 4-bit alpha
 								if (a4)
 								{
-									ar[gx + x] = (WORD)((a4 << 12) | 0x0FFF);
+									pAr[gx + x] = (WORD)((a4 << 12) | 0x0FFF);
 									if (x + 1 > w)
 										w = x + 1;
 								}
 							}
 						}
-						g->u0 = gx / (float)ATLAS_DIM;
-						g->v0 = gy / (float)ATLAS_DIM;
-						g->u1 = (gx + 16) / (float)ATLAS_DIM;
-						g->v1 = (gy + 16) / (float)ATLAS_DIM;
-						g->adv = (BYTE)(w ? w + 1 : 4);
+						pG->u0 = gx / (float)ATLAS_DIM;
+						pG->v0 = gy / (float)ATLAS_DIM;
+						pG->u1 = (gx + 16) / (float)ATLAS_DIM;
+						pG->v1 = (gy + 16) / (float)ATLAS_DIM;
+						pG->adv = (BYTE)(w ? w + 1 : 4);
 					}
-				IDirectDrawSurface_Unlock(tmp, NULL);
-				s_glyphReady = TRUE;
+				IDirectDrawSurface_Unlock(pTmp, NULL);
+				s_bGlyphReady = TRUE;
 			}
-			IDirectDrawSurface_Unlock(stg, NULL);
+			IDirectDrawSurface_Unlock(pStg, NULL);
 		}
-		IDirectDrawSurface_Release(tmp);
+		IDirectDrawSurface_Release(pTmp);
 	}
 
 	// upload staging -> VRAM texture
@@ -558,40 +559,40 @@ static void BuildAtlas(void)
 	sd.ddpfPixelFormat.dwGBitMask = 0x00F0;
 	sd.ddpfPixelFormat.dwBBitMask = 0x000F;
 	sd.ddpfPixelFormat.dwRGBAlphaBitMask = 0xF000;
-	if (IDirectDraw_CreateSurface(s_dd, &sd, &dst, NULL) == DD_OK && dst)
+	if (IDirectDraw_CreateSurface(s_pDd, &sd, &pDst, NULL) == DD_OK && pDst)
 	{
-		if (IDirectDrawSurface_QueryInterface(stg, &IID_IDirect3DTexture2, (void **)&stgTex) ==
+		if (IDirectDrawSurface_QueryInterface(pStg, &IID_IDirect3DTexture2, (void **)&pStgTex) ==
 		        DD_OK &&
-		    IDirectDrawSurface_QueryInterface(dst, &IID_IDirect3DTexture2, (void **)&s_atlasTex) ==
-		        DD_OK &&
-		    IDirect3DTexture2_Load(s_atlasTex, stgTex) == DD_OK &&
-		    IDirect3DTexture2_GetHandle(s_atlasTex, s_dev, &s_hAtlas) == DD_OK)
+		    IDirectDrawSurface_QueryInterface(pDst, &IID_IDirect3DTexture2,
+		                                      (void **)&s_pAtlasTex) == DD_OK &&
+		    IDirect3DTexture2_Load(s_pAtlasTex, pStgTex) == DD_OK &&
+		    IDirect3DTexture2_GetHandle(s_pAtlasTex, s_pDev, &s_hAtlas) == DD_OK)
 		{
-			s_atlasSurf = dst;
+			s_pAtlasSurf = pDst;
 			OutputDebugStringW(L"atlas: VRAM upload OK, handle bound\r\n");
 		}
 		else
 		{
 			OutputDebugStringW(L"atlas: QI/Load/GetHandle FAIL\r\n");
-			if (s_atlasTex)
+			if (s_pAtlasTex)
 			{
-				IDirect3DTexture2_Release(s_atlasTex);
-				s_atlasTex = NULL;
+				IDirect3DTexture2_Release(s_pAtlasTex);
+				s_pAtlasTex = NULL;
 			}
-			IDirectDrawSurface_Release(dst);
+			IDirectDrawSurface_Release(pDst);
 		}
-		if (stgTex)
-			IDirect3DTexture2_Release(stgTex);
+		if (pStgTex)
+			IDirect3DTexture2_Release(pStgTex);
 	}
 	else
 		OutputDebugStringW(L"atlas: VRAM dest create FAIL\r\n");
-	IDirectDrawSurface_Release(stg);
+	IDirectDrawSurface_Release(pStg);
 }
 
-static void D3DLog(const WCHAR *what, HRESULT hr)
+static void D3DLog(const WCHAR *pszWhat, HRESULT hr)
 {
 	WCHAR b[96];
-	wsprintfW(b, L"D3D: %s hr=%08x\r\n", what, (unsigned)hr);
+	wsprintfW(b, L"D3D: %s hr=%08x\r\n", pszWhat, (unsigned)hr);
 	OutputDebugStringW(b);
 }
 
@@ -600,27 +601,27 @@ static void InitD3D(void)
 	HRESULT hr;
 	D3DVIEWPORT2 vp;
 
-	s_d3dOk = FALSE;
-	if (!s_dd || !s_back)
+	s_bD3dOk = FALSE;
+	if (!s_pDd || !s_pBack)
 	{
 		OutputDebugStringW(L"D3D: no flip back buffer\r\n");
 		return;
 	}
 
-	hr = IDirectDraw_QueryInterface(s_dd, &IID_IDirect3D2, (void **)&s_d3d);
+	hr = IDirectDraw_QueryInterface(s_pDd, &IID_IDirect3D2, (void **)&s_pD3d);
 	D3DLog(L"QI IDirect3D2", hr);
-	if (hr != DD_OK || !s_d3d)
+	if (hr != DD_OK || !s_pD3d)
 		return;
-	hr = IDirect3D2_CreateDevice(s_d3d, &IID_IDirect3DHALDevice, s_back, &s_dev);
+	hr = IDirect3D2_CreateDevice(s_pD3d, &IID_IDirect3DHALDevice, s_pBack, &s_pDev);
 	D3DLog(L"CreateDevice(HAL)", hr);
-	if (hr != DD_OK || !s_dev)
+	if (hr != DD_OK || !s_pDev)
 		return;
-	hr = IDirect3D2_CreateViewport(s_d3d, &s_vp, NULL);
+	hr = IDirect3D2_CreateViewport(s_pD3d, &s_pVp, NULL);
 	D3DLog(L"CreateViewport", hr);
-	if (hr != DD_OK || !s_vp)
+	if (hr != DD_OK || !s_pVp)
 		return;
 
-	IDirect3DDevice2_AddViewport(s_dev, s_vp);
+	IDirect3DDevice2_AddViewport(s_pDev, s_pVp);
 	memset(&vp, 0, sizeof(vp));
 	vp.dwSize = sizeof(vp);
 	vp.dwWidth = SCREEN_W;
@@ -631,76 +632,77 @@ static void InitD3D(void)
 	vp.dvClipHeight = 2.0f;
 	vp.dvMinZ = 0.0f;
 	vp.dvMaxZ = 1.0f;
-	IDirect3DViewport2_SetViewport2(s_vp, &vp);
-	IDirect3DDevice2_SetCurrentViewport(s_dev, s_vp);
+	IDirect3DViewport2_SetViewport2(s_pVp, &vp);
+	IDirect3DDevice2_SetCurrentViewport(s_pDev, s_pVp);
 
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_ZENABLE, FALSE);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_CULLMODE, D3DCULL_NONE);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_SHADEMODE, D3DSHADE_FLAT);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_ALPHABLENDENABLE, TRUE);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_SRCBLEND, D3DBLEND_SRCALPHA);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_DESTBLEND, D3DBLEND_INVSRCALPHA);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_TEXTUREMAPBLEND, D3DTBLEND_MODULATEALPHA);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_TEXTUREMIN, D3DFILTER_NEAREST);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_TEXTUREMAG, D3DFILTER_NEAREST);
-	IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_TEXTUREHANDLE, 0);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_ZENABLE, FALSE);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_CULLMODE, D3DCULL_NONE);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_SHADEMODE, D3DSHADE_FLAT);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_ALPHABLENDENABLE, TRUE);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_SRCBLEND, D3DBLEND_SRCALPHA);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_DESTBLEND, D3DBLEND_INVSRCALPHA);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_TEXTUREMAPBLEND,
+	                                D3DTBLEND_MODULATEALPHA);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_TEXTUREMIN, D3DFILTER_NEAREST);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_TEXTUREMAG, D3DFILTER_NEAREST);
+	IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_TEXTUREHANDLE, 0);
 
-	s_d3dOk = TRUE;
+	s_bD3dOk = TRUE;
 	OutputDebugStringW(L"D3D: device UP - PVR2 HW compositor\r\n");
 }
 
 static void DestroyD3D(void)
 {
-	if (s_atlasTex)
+	if (s_pAtlasTex)
 	{
-		IDirect3DTexture2_Release(s_atlasTex);
-		s_atlasTex = NULL;
+		IDirect3DTexture2_Release(s_pAtlasTex);
+		s_pAtlasTex = NULL;
 	}
-	if (s_atlasSurf)
+	if (s_pAtlasSurf)
 	{
-		IDirectDrawSurface_Release(s_atlasSurf);
-		s_atlasSurf = NULL;
+		IDirectDrawSurface_Release(s_pAtlasSurf);
+		s_pAtlasSurf = NULL;
 	}
 	s_hAtlas = 0;
-	if (s_dev && s_vp)
-		IDirect3DDevice2_DeleteViewport(s_dev, s_vp);
-	if (s_vp)
+	if (s_pDev && s_pVp)
+		IDirect3DDevice2_DeleteViewport(s_pDev, s_pVp);
+	if (s_pVp)
 	{
-		IDirect3DViewport2_Release(s_vp);
-		s_vp = NULL;
+		IDirect3DViewport2_Release(s_pVp);
+		s_pVp = NULL;
 	}
-	if (s_dev)
+	if (s_pDev)
 	{
-		IDirect3DDevice2_Release(s_dev);
-		s_dev = NULL;
+		IDirect3DDevice2_Release(s_pDev);
+		s_pDev = NULL;
 	}
-	if (s_d3d)
+	if (s_pD3d)
 	{
-		IDirect3D2_Release(s_d3d);
-		s_d3d = NULL;
+		IDirect3D2_Release(s_pD3d);
+		s_pD3d = NULL;
 	}
-	s_d3dOk = FALSE;
+	s_bD3dOk = FALSE;
 }
 
 static BOOL CreateSurfaces(void)
 {
 	DDSURFACEDESC ddsd;
 	HRESULT hr = E_FAIL;
-	int tries;
+	int nTries;
 
-	for (tries = 0; tries < 30; tries++)
+	for (nTries = 0; nTries < 30; nTries++)
 	{
-		hr = DirectDrawCreate(NULL, &s_dd, NULL);
+		hr = DirectDrawCreate(NULL, &s_pDd, NULL);
 		if (hr == DD_OK)
 			break;
-		s_dd = NULL;
+		s_pDd = NULL;
 		Sleep(100);
 	}
 	if (hr != DD_OK)
 		return FALSE;
 
-	IDirectDraw_SetCooperativeLevel(s_dd, s_hwnd, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN);
-	IDirectDraw_SetDisplayMode(s_dd, SCREEN_W, SCREEN_H, 16);
+	IDirectDraw_SetCooperativeLevel(s_pDd, s_hwnd, DDSCL_EXCLUSIVE | DDSCL_FULLSCREEN);
+	IDirectDraw_SetDisplayMode(s_pDd, SCREEN_W, SCREEN_H, 16);
 
 	memset(&ddsd, 0, sizeof(ddsd));
 	ddsd.dwSize = sizeof(ddsd);
@@ -708,16 +710,16 @@ static BOOL CreateSurfaces(void)
 	ddsd.ddsCaps.dwCaps =
 	    DDSCAPS_PRIMARYSURFACE | DDSCAPS_FLIP | DDSCAPS_COMPLEX | DDSCAPS_3DDEVICE;
 	ddsd.dwBackBufferCount = 1;
-	hr = IDirectDraw_CreateSurface(s_dd, &ddsd, &s_primary, NULL);
+	hr = IDirectDraw_CreateSurface(s_pDd, &ddsd, &s_pPrimary, NULL);
 	if (hr == DD_OK)
 	{
 		DDSCAPS caps;
 		memset(&caps, 0, sizeof(caps));
 		caps.dwCaps = DDSCAPS_BACKBUFFER;
-		if (IDirectDrawSurface_GetAttachedSurface(s_primary, &caps, &s_back) == DD_OK)
-			s_useFlip = TRUE;
+		if (IDirectDrawSurface_GetAttachedSurface(s_pPrimary, &caps, &s_pBack) == DD_OK)
+			s_bUseFlip = TRUE;
 	}
-	if (!s_useFlip)
+	if (!s_bUseFlip)
 	{
 		WCHAR b[64];
 		wsprintfW(b, L"GfxInit: flip+3DDEVICE primary FAIL hr=%08x\r\n", (unsigned)hr);
@@ -730,33 +732,33 @@ static BOOL CreateSurfaces(void)
 static void DestroySurfaces(void)
 {
 	s_hPage = 0; // page layer (browser only; NULL elsewhere)
-	if (s_pageTex)
+	if (s_pPageTex)
 	{
-		IDirect3DTexture2_Release(s_pageTex);
-		s_pageTex = NULL;
+		IDirect3DTexture2_Release(s_pPageTex);
+		s_pPageTex = NULL;
 	}
-	if (s_pageSurf)
+	if (s_pPageSurf)
 	{
-		IDirectDrawSurface_Release(s_pageSurf);
-		s_pageSurf = NULL;
+		IDirectDrawSurface_Release(s_pPageSurf);
+		s_pPageSurf = NULL;
 	}
-	if (s_gdiSurf)
+	if (s_pGdiSurf)
 	{
-		IDirectDrawSurface_Release(s_gdiSurf);
-		s_gdiSurf = NULL;
+		IDirectDrawSurface_Release(s_pGdiSurf);
+		s_pGdiSurf = NULL;
 	}
-	s_back = NULL;
-	s_useFlip = FALSE;
-	if (s_primary)
+	s_pBack = NULL;
+	s_bUseFlip = FALSE;
+	if (s_pPrimary)
 	{
-		IDirectDrawSurface_Release(s_primary);
-		s_primary = NULL;
+		IDirectDrawSurface_Release(s_pPrimary);
+		s_pPrimary = NULL;
 	}
-	if (s_dd)
+	if (s_pDd)
 	{
-		IDirectDraw_RestoreDisplayMode(s_dd);
-		IDirectDraw_Release(s_dd);
-		s_dd = NULL;
+		IDirectDraw_RestoreDisplayMode(s_pDd);
+		IDirectDraw_Release(s_pDd);
+		s_pDd = NULL;
 	}
 }
 
@@ -766,7 +768,7 @@ BOOL GfxInit(HWND hwnd)
 	if (!CreateSurfaces())
 		return FALSE;
 	InitD3D();
-	if (!s_d3dOk)
+	if (!s_bD3dOk)
 		return FALSE; // hard requirement now (no CPU fallback path)
 	g_FontUI = MakeFont(12, FW_NORMAL);
 	g_FontBold = MakeFont(12, FW_BOLD);
@@ -777,7 +779,7 @@ BOOL GfxInit(HWND hwnd)
 	}
 	__except (EXCEPTION_EXECUTE_HANDLER)
 	{
-		s_glyphReady = FALSE;
+		s_bGlyphReady = FALSE;
 		OutputDebugStringW(L"GfxInit: BuildAtlas faulted\r\n");
 	}
 	return TRUE;
@@ -787,22 +789,22 @@ void GfxShutdown(void)
 {
 	DestroyD3D();
 	DestroySurfaces();
-	if (s_vb)
-		LocalFree(s_vb);
-	if (s_ib)
-		LocalFree(s_ib);
-	if (s_qtex)
-		LocalFree(s_qtex);
-	if (s_dvb)
-		LocalFree(s_dvb);
-	if (s_dib)
-		LocalFree(s_dib);
-	if (s_dtex)
-		LocalFree(s_dtex);
-	s_vb = s_dvb = NULL;
-	s_ib = s_dib = NULL;
-	s_qtex = s_dtex = NULL;
-	s_cap = s_dcap = s_nQuad = s_dQuad = 0;
+	if (s_pVb)
+		LocalFree(s_pVb);
+	if (s_pIb)
+		LocalFree(s_pIb);
+	if (s_pQtex)
+		LocalFree(s_pQtex);
+	if (s_pDvb)
+		LocalFree(s_pDvb);
+	if (s_pDib)
+		LocalFree(s_pDib);
+	if (s_pDtex)
+		LocalFree(s_pDtex);
+	s_pVb = s_pDvb = NULL;
+	s_pIb = s_pDib = NULL;
+	s_pQtex = s_pDtex = NULL;
+	s_nCap = s_nDcap = s_nQuad = s_nDQuad = 0;
 }
 
 // --- public draw API: enqueue quads (no pixels touched) -------------------------
@@ -825,21 +827,21 @@ void GfxBevel(const RECT *rc, BOOL raised)
 
 void GfxIcon(int id, int x, int y)
 {
-	RectUV *u;
+	RectUV *pU;
 	if (id < 0 || id >= ICON_COUNT)
 		return;
-	u = &s_iconUV[id][0];
-	PushQuad((float)x, (float)y, (float)(x + 16), (float)(y + 16), u->u0, u->v0, u->u1, u->v1,
+	pU = &s_aIconUV[id][0];
+	PushQuad((float)x, (float)y, (float)(x + 16), (float)(y + 16), pU->u0, pU->v0, pU->u1, pU->v1,
 	         0xFFFFFFFF, 1);
 }
 
 void GfxIconBig(int id, int x, int y)
 {
-	RectUV *u;
+	RectUV *pU;
 	if (id < 0 || id >= ICON_COUNT)
 		return;
-	u = &s_iconUV[id][1];
-	PushQuad((float)x, (float)y, (float)(x + 32), (float)(y + 32), u->u0, u->v0, u->u1, u->v1,
+	pU = &s_aIconUV[id][1];
+	PushQuad((float)x, (float)y, (float)(x + 32), (float)(y + 32), pU->u0, pU->v0, pU->u1, pU->v1,
 	         0xFFFFFFFF, 1);
 }
 
@@ -854,110 +856,112 @@ void GfxUnlockDC(HDC hdc)
 
 void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const WCHAR *text)
 {
-	int fi = (font == g_FontBold) ? 1 : (font == g_FontTitle) ? 2 : 0;
-	D3DCOLOR fgc = ToArgb(fg), bgc = ToArgb(bg);
+	int nFi = (font == g_FontBold) ? 1 : (font == g_FontTitle) ? 2 : 0;
+	D3DCOLOR dwFgc = ToArgb(fg), dwBgc = ToArgb(bg);
 	const WCHAR *p;
-	int runW = 0, cx;
+	int nRunW = 0, nCx;
 
 	(void)hdc;
-	if (!s_glyphReady)
+	if (!s_bGlyphReady)
 		return;
 	for (p = text; *p; p++)
 	{
 		WCHAR ch = (*p < GFIRST || *p > GLAST) ? '?' : *p;
-		runW += s_glyph[fi][ch - GFIRST].adv;
+		nRunW += s_aGlyph[nFi][ch - GFIRST].adv;
 	}
-	if (runW > 0) // one opaque bg quad for the whole run
-		PushQuad((float)x, (float)y, (float)(x + runW), (float)(y + GH), 0, 0, 0, 0, bgc, 0);
-	cx = x;
+	if (nRunW > 0) // one opaque bg quad for the whole run
+		PushQuad((float)x, (float)y, (float)(x + nRunW), (float)(y + GH), 0, 0, 0, 0, dwBgc, 0);
+	nCx = x;
 	for (p = text; *p; p++)
 	{
 		WCHAR ch = (*p < GFIRST || *p > GLAST) ? '?' : *p;
-		GlyphUV *g = &s_glyph[fi][ch - GFIRST];
-		PushQuad((float)cx, (float)y, (float)(cx + 16), (float)(y + GH), g->u0, g->v0, g->u1, g->v1,
-		         fgc, 1);
-		cx += g->adv;
+		GlyphUV *pG = &s_aGlyph[nFi][ch - GFIRST];
+		PushQuad((float)nCx, (float)y, (float)(nCx + 16), (float)(y + GH), pG->u0, pG->v0, pG->u1,
+		         pG->v1, dwFgc, 1);
+		nCx += pG->adv;
 	}
 }
 
 int GfxTextWidth(HFONT font, const WCHAR *text)
 {
-	int fi = (font == g_FontBold) ? 1 : (font == g_FontTitle) ? 2 : 0, w = 0;
+	int nFi = (font == g_FontBold) ? 1 : (font == g_FontTitle) ? 2 : 0, nW = 0;
 	const WCHAR *p;
-	if (!s_glyphReady)
+	if (!s_bGlyphReady)
 		return 0;
 	for (p = text; *p; p++)
 	{
 		WCHAR ch = (*p < GFIRST || *p > GLAST) ? '?' : *p;
-		w += s_glyph[fi][ch - GFIRST].adv;
+		nW += s_aGlyph[nFi][ch - GFIRST].adv;
 	}
-	return w;
+	return nW;
 }
 
 // --- desktop cache as a vertex sub-list -----------------------------------------
 void GfxBeginDesktopCache(void)
 {
-	s_recDesk = TRUE;
+	s_bRecDesk = TRUE;
 	s_nQuad = 0; // record desktop quads from index 0
 }
 
 void GfxEndDesktopCache(void)
 {
-	s_dQuad = s_nQuad;
-	if (!GrowQuads(&s_dvb, &s_dib, &s_dtex, &s_dcap, s_dQuad, 0))
-		s_dQuad = s_dcap; // fit the desktop
-	if (s_dQuad > 0)
+	s_nDQuad = s_nQuad;
+	if (!GrowQuads(&s_pDvb, &s_pDib, &s_pDtex, &s_nDcap, s_nDQuad, 0))
+		s_nDQuad = s_nDcap; // fit the desktop
+	if (s_nDQuad > 0)
 	{
-		memcpy(s_dvb, s_vb, s_dQuad * 4 * sizeof(D3DTLVERTEX));
-		memcpy(s_dib, s_ib, s_dQuad * 6 * sizeof(WORD));
-		memcpy(s_dtex, s_qtex, s_dQuad);
+		memcpy(s_pDvb, s_pVb, s_nDQuad * 4 * sizeof(D3DTLVERTEX));
+		memcpy(s_pDib, s_pIb, s_nDQuad * 6 * sizeof(WORD));
+		memcpy(s_pDtex, s_pQtex, s_nDQuad);
 	}
-	s_recDesk = FALSE;
+	s_bRecDesk = FALSE;
 	s_nQuad = 0;
 }
 
 void GfxBlitDesktopCache(void)
 {
-	if (s_dQuad <= 0)
+	if (s_nDQuad <= 0)
 	{
 		s_nQuad = 0;
 		return;
 	}
-	if (!GrowQuads(&s_vb, &s_ib, &s_qtex, &s_cap, s_dQuad, 0))
+	if (!GrowQuads(&s_pVb, &s_pIb, &s_pQtex, &s_nCap, s_nDQuad, 0))
 	{
 		s_nQuad = 0;
 		return;
 	} // room for it
-	memcpy(s_vb, s_dvb, s_dQuad * 4 * sizeof(D3DTLVERTEX));
-	memcpy(s_ib, s_dib, s_dQuad * 6 * sizeof(WORD)); // base-relative indices stay valid at slot 0
-	memcpy(s_qtex, s_dtex, s_dQuad);
-	s_nQuad = s_dQuad;
+	memcpy(s_pVb, s_pDvb, s_nDQuad * 4 * sizeof(D3DTLVERTEX));
+	memcpy(s_pIb, s_pDib,
+	       s_nDQuad * 6 * sizeof(WORD)); // base-relative indices stay valid at slot 0
+	memcpy(s_pQtex, s_pDtex, s_nDQuad);
+	s_nQuad = s_nDQuad;
 }
 
 // --- present: the only D3D-talking path -----------------------------------------
-static int s_ghostIcon = -1;
+static int s_nGhostIcon = -1;
 void GfxSetDragGhost(int iconId)
 {
-	s_ghostIcon = iconId;
+	s_nGhostIcon = iconId;
 }
 
 BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor)
 {
 	int i;
-	if (!s_d3dOk || !s_dev || !s_primary)
+	if (!s_bD3dOk || !s_pDev || !s_pPrimary)
 		return FALSE;
 
-	if (s_ghostIcon >= 0 && s_ghostIcon < ICON_COUNT) // drag ghost: translucent 32x32 under cursor
+	if (s_nGhostIcon >= 0 &&
+	    s_nGhostIcon < ICON_COUNT) // drag ghost: translucent 32x32 under cursor
 	{
-		RectUV *u = &s_iconUV[s_ghostIcon][1];
+		RectUV *pU = &s_aIconUV[s_nGhostIcon][1];
 		int gx = cursorX - 6, gy = cursorY - 4; // carried just below-right of the pointer tip
-		PushQuad((float)gx, (float)gy, (float)(gx + 32), (float)(gy + 32), u->u0, u->v0, u->u1,
-		         u->v1, 0xB0FFFFFF, 1); // ~0.69 alpha (blend is SRCALPHA)
+		PushQuad((float)gx, (float)gy, (float)(gx + 32), (float)(gy + 32), pU->u0, pU->v0, pU->u1,
+		         pU->v1, 0xB0FFFFFF, 1); // ~0.69 alpha (blend is SRCALPHA)
 	}
 
 	if (showCursor) // cursor = ICON_CURSOR quad, drawn last (top)
 	{
-		RectUV *u = &s_iconUV[ICON_CURSOR][0];
+		RectUV *pU = &s_aIconUV[ICON_CURSOR][0];
 		float x1, y1;
 		// Clamp the hotspot on-screen and clip the 16x16 sprite to the screen so the pointer
 		// never draws past the edges (the arrow's tip is the top-left hotspot, so it can sit
@@ -976,54 +980,57 @@ BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor)
 		y1 = (float)(cursorY + 16);
 		if (y1 > SCREEN_H)
 			y1 = SCREEN_H;
-		PushQuad((float)cursorX, (float)cursorY, x1, y1, u->u0, u->v0,
-		         u->u0 + (u->u1 - u->u0) * (x1 - cursorX) / 16.0f, // scale UV to the clipped extent
-		         u->v0 + (u->v1 - u->v0) * (y1 - cursorY) / 16.0f, 0xFFFFFFFF, 1);
+		PushQuad((float)cursorX, (float)cursorY, x1, y1, pU->u0, pU->v0,
+		         pU->u0 +
+		             (pU->u1 - pU->u0) * (x1 - cursorX) / 16.0f, // scale UV to the clipped extent
+		         pU->v0 + (pU->v1 - pU->v0) * (y1 - cursorY) / 16.0f, 0xFFFFFFFF, 1);
 	}
 
-	if (IDirect3DDevice2_BeginScene(s_dev) == D3D_OK)
+	if (IDirect3DDevice2_BeginScene(s_pDev) == D3D_OK)
 	{
 		i = 0;
 		while (i < s_nQuad) // emit-order batches: run per texture state
 		{
-			BYTE tex = s_qtex[i];
+			BYTE bTex = s_pQtex[i];
 			int j = i;
 			D3DTEXTUREHANDLE th;
-			while (j < s_nQuad && s_qtex[j] == tex)
+			while (j < s_nQuad && s_pQtex[j] == bTex)
 				j++;
-			th = (tex == 2) ? s_hPage : (tex == 1) ? s_hAtlas : 0; // 2 = page, 1 = atlas, 0 = solid
-			IDirect3DDevice2_SetRenderState(s_dev, D3DRENDERSTATE_TEXTUREHANDLE, th);
-			// Pass ONLY this run's vertices (&s_vb[i*4], (j-i)*4) with the base-relative
-			// index template s_ib[0..]. Passing the whole array each batch made the TA
+			th = (bTex == 2)   ? s_hPage
+			     : (bTex == 1) ? s_hAtlas
+			                   : 0; // 2 = page, 1 = atlas, 0 = solid
+			IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_TEXTUREHANDLE, th);
+			// Pass ONLY this run's vertices (&s_pVb[i*4], (j-i)*4) with the base-relative
+			// index template s_pIb[0..]. Passing the whole array each batch made the TA
 			// re-transform every vertex per batch -> O(verts x batches) -> the 56ms spike.
-			IDirect3DDevice2_DrawIndexedPrimitive(s_dev, D3DPT_TRIANGLELIST, D3DVT_TLVERTEX,
-			                                      &s_vb[i * 4], (j - i) * 4, s_ib, (j - i) * 6,
+			IDirect3DDevice2_DrawIndexedPrimitive(s_pDev, D3DPT_TRIANGLELIST, D3DVT_TLVERTEX,
+			                                      &s_pVb[i * 4], (j - i) * 4, s_pIb, (j - i) * 6,
 			                                      D3DDP_DONOTCLIP | D3DDP_DONOTLIGHT);
 			i = j;
 		}
-		IDirect3DDevice2_EndScene(s_dev);
+		IDirect3DDevice2_EndScene(s_pDev);
 	}
 
 	{ // reclaim RAM when the scene has stayed well under capacity (hysteresis: a ~120-frame window
 		// so a brief burst of windows doesn't thrash grow<->shrink). want = recent peak + ~50%
 		// slack.
-		static int peak, frames;
-		if (s_nQuad > peak)
-			peak = s_nQuad;
-		if (++frames >= 120)
+		static int nPeak, nFrames;
+		if (s_nQuad > nPeak)
+			nPeak = s_nQuad;
+		if (++nFrames >= 120)
 		{
-			int want = peak + (peak >> 1) + 32;
-			if (s_cap > QUAD_INIT && want < s_cap / 2)
-				ShrinkScene(want);
-			peak = 0;
-			frames = 0;
+			int nWant = nPeak + (nPeak >> 1) + 32;
+			if (s_nCap > QUAD_INIT && nWant < s_nCap / 2)
+				ShrinkScene(nWant);
+			nPeak = 0;
+			nFrames = 0;
 		}
 	}
 	s_nQuad = 0;
 
-	if (IDirectDrawSurface_Flip(s_primary, NULL, DDFLIP_WAIT) == DDERR_SURFACELOST)
+	if (IDirectDrawSurface_Flip(s_pPrimary, NULL, DDFLIP_WAIT) == DDERR_SURFACELOST)
 	{
-		IDirectDrawSurface_Restore(s_primary);
+		IDirectDrawSurface_Restore(s_pPrimary);
 		return TRUE;
 	}
 	return FALSE;
@@ -1033,9 +1040,9 @@ BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor)
 // of Sleep (which rounds up to the ~50ms CE system tick = the 20fps cap).
 HRESULT GfxWaitVBlank(void)
 {
-	if (!s_dd)
+	if (!s_pDd)
 		return E_FAIL;
-	return IDirectDraw_WaitForVerticalBlank(s_dd, DDWAITVB_BLOCKBEGIN, NULL);
+	return IDirectDraw_WaitForVerticalBlank(s_pDd, DDWAITVB_BLOCKBEGIN, NULL);
 }
 
 //
@@ -1047,13 +1054,13 @@ BOOL GfxInitPageLayer(void)
 {
 	GDISurfaceInfo info;
 	DDSURFACEDESC sd;
-	LPDIRECTDRAWSURFACE sys = NULL;
-	LPDIRECTDRAWSURFACE3 sys3 = NULL;
+	LPDIRECTDRAWSURFACE pSys = NULL;
+	LPDIRECTDRAWSURFACE3 pSys3 = NULL;
 	PHYSICAL_ADDRESS pa;
-	void *bits;
+	void *pvBits;
 	HDC dc;
 
-	if (!s_dd || !s_dev)
+	if (!s_pDd || !s_pDev)
 		return FALSE;
 
 	dc = GetDC(NULL);
@@ -1076,8 +1083,8 @@ BOOL GfxInitPageLayer(void)
 
 	pa.HighPart = 0;
 	pa.LowPart = info.physicalAddr;
-	bits = MmMapIoSpace(pa, (ULONG)(info.height * info.stride), TRUE);
-	if (!bits)
+	pvBits = MmMapIoSpace(pa, (ULONG)(info.height * info.stride), TRUE);
+	if (!pvBits)
 	{
 		OutputDebugStringW(L"page: MmMapIoSpace FAIL\r\n");
 		return FALSE;
@@ -1092,13 +1099,14 @@ BOOL GfxInitPageLayer(void)
 	sd.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
 	sd.dwWidth = info.width;
 	sd.dwHeight = info.height;
-	if (IDirectDraw_CreateSurface(s_dd, &sd, &sys, NULL) != DD_OK || !sys)
+	if (IDirectDraw_CreateSurface(s_pDd, &sd, &pSys, NULL) != DD_OK || !pSys)
 	{
 		OutputDebugStringW(L"page: gdi surface create FAIL\r\n");
 		return FALSE;
 	}
-	if (IDirectDrawSurface_QueryInterface(sys, &IID_IDirectDrawSurface3, (void **)&sys3) == DD_OK &&
-	    sys3)
+	if (IDirectDrawSurface_QueryInterface(pSys, &IID_IDirectDrawSurface3, (void **)&pSys3) ==
+	        DD_OK &&
+	    pSys3)
 	{
 		memset(&sd, 0, sizeof(sd));
 		sd.dwSize = sizeof(sd);
@@ -1106,18 +1114,18 @@ BOOL GfxInitPageLayer(void)
 		sd.dwWidth = info.width;
 		sd.dwHeight = info.height;
 		sd.lPitch = info.stride;
-		sd.lpSurface = bits;
+		sd.lpSurface = pvBits;
 		sd.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
 		sd.ddpfPixelFormat.dwFlags = DDPF_RGB;
 		sd.ddpfPixelFormat.dwRGBBitCount = 16;
 		sd.ddpfPixelFormat.dwRBitMask = 0xF800;
 		sd.ddpfPixelFormat.dwGBitMask = 0x07E0;
 		sd.ddpfPixelFormat.dwBBitMask = 0x001F;
-		if (IDirectDrawSurface3_SetSurfaceDesc(sys3, &sd, 0) != DD_OK)
+		if (IDirectDrawSurface3_SetSurfaceDesc(pSys3, &sd, 0) != DD_OK)
 			OutputDebugStringW(L"page: SetSurfaceDesc FAIL\r\n");
-		IDirectDrawSurface3_Release(sys3);
+		IDirectDrawSurface3_Release(pSys3);
 	}
-	s_gdiSurf = sys;
+	s_pGdiSurf = pSys;
 
 	// VRAM texture (565) the page is blitted into; bound as a normal compositor texture
 	memset(&sd, 0, sizeof(sd));
@@ -1132,14 +1140,14 @@ BOOL GfxInitPageLayer(void)
 	sd.ddpfPixelFormat.dwRBitMask = 0xF800;
 	sd.ddpfPixelFormat.dwGBitMask = 0x07E0;
 	sd.ddpfPixelFormat.dwBBitMask = 0x001F;
-	if (IDirectDraw_CreateSurface(s_dd, &sd, &s_pageSurf, NULL) != DD_OK || !s_pageSurf)
+	if (IDirectDraw_CreateSurface(s_pDd, &sd, &s_pPageSurf, NULL) != DD_OK || !s_pPageSurf)
 	{
 		OutputDebugStringW(L"page: vram texture create FAIL\r\n");
 		return FALSE;
 	}
-	if (IDirectDrawSurface_QueryInterface(s_pageSurf, &IID_IDirect3DTexture2,
-	                                      (void **)&s_pageTex) != DD_OK ||
-	    IDirect3DTexture2_GetHandle(s_pageTex, s_dev, &s_hPage) != DD_OK)
+	if (IDirectDrawSurface_QueryInterface(s_pPageSurf, &IID_IDirect3DTexture2,
+	                                      (void **)&s_pPageTex) != DD_OK ||
+	    IDirect3DTexture2_GetHandle(s_pPageTex, s_pDev, &s_hPage) != DD_OK)
 	{
 		OutputDebugStringW(L"page: texture handle FAIL\r\n");
 		return FALSE;
@@ -1153,7 +1161,7 @@ BOOL GfxInitPageLayer(void)
 void GfxBlitPage(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh)
 {
 	RECT src;
-	if (!s_gdiSurf || !s_pageSurf || !s_hPage)
+	if (!s_pGdiSurf || !s_pPageSurf || !s_hPage)
 		return;
 	if (sw > PAGE_TW)
 		sw = PAGE_TW;
@@ -1163,7 +1171,7 @@ void GfxBlitPage(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh)
 	src.top = sy;
 	src.right = sx + sw;
 	src.bottom = sy + sh;
-	IDirectDrawSurface_BltFast(s_pageSurf, 0, 0, s_gdiSurf, &src, DDBLTFAST_WAIT);
+	IDirectDrawSurface_BltFast(s_pPageSurf, 0, 0, s_pGdiSurf, &src, DDBLTFAST_WAIT);
 	PushQuad((float)dx, (float)dy, (float)(dx + dw), (float)(dy + dh), 0.0f, 0.0f,
 	         (float)sw / PAGE_TW, (float)sh / PAGE_TH, 0xFFFFFFFF, 2);
 }

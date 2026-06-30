@@ -34,7 +34,7 @@ typedef struct
 	WCHAR result[DCB_RESLEN];
 } Stage;
 
-static Stage s_stage[] = {
+static Stage s_aStage[] = {
     {L"Starting Windows CE", 0, DCB_PENDING, 0, L""},
     {L"Initializing display", 0, DCB_PENDING, 0, L"PVR2"},
     {L"Network adapter", 1, DCB_PENDING, 0, L""},
@@ -42,22 +42,22 @@ static Stage s_stage[] = {
     {L"External storage", 3, DCB_PENDING, 0, L""},
     {L"Loading desktop", 4, DCB_PENDING, 0, L""},
 };
-#define NSTAGE   (int)(sizeof(s_stage) / sizeof(s_stage[0]))
+#define NSTAGE   (int)(sizeof(s_aStage) / sizeof(s_aStage[0]))
 #define NROWS    (NSTAGE - 1) // the "loading desktop" stage isn't a checklist row
 
 #define MINDWELL 500 // each stage visible at least this long (ms)
 #define NET_TMO  4000
 #define ADDR_TMO 8000
 
-static int s_cur, s_skip, s_launch, s_netKicked, s_storeOk;
+static int s_nCur, s_bSkip, s_bLaunch, s_bNetKicked, s_bStoreOk;
 
 static void KickNetwork(void) // force the comm stack (winsock->microstk->mppp) up
 {
 	WSADATA wsa;
 	SOCKET s;
-	if (s_netKicked)
+	if (s_bNetKicked)
 		return;
-	s_netKicked = 1;
+	s_bNetKicked = 1;
 	if (WSAStartup(0x0101, &wsa) != 0)
 		return;
 	s = socket(AF_INET, SOCK_DGRAM, 0);
@@ -69,94 +69,94 @@ static void KickNetwork(void) // force the comm stack (winsock->microstk->mppp) 
 // f_opendir), which mounts the card (SdInit over SPI) on first access. Presence = a valid handle
 // or an empty-but-mounted volume; the capacity string is published into DCBOOT by the SD driver
 // once it mounts (it knows the sector count), so we read it back here.
-static int ProbeStorage(WCHAR *out)
+static int ProbeStorage(WCHAR *pszOut)
 {
 	WIN32_FIND_DATAW fd;
-	DcBootShared *db;
+	DcBootShared *pDb;
 	HANDLE h = FindFirstFileW(L"\\External Storage\\*", &fd);
-	int present = (h != INVALID_HANDLE_VALUE) || (GetLastError() == ERROR_NO_MORE_FILES);
+	int bPresent = (h != INVALID_HANDLE_VALUE) || (GetLastError() == ERROR_NO_MORE_FILES);
 	if (h != INVALID_HANDLE_VALUE)
 		FindClose(h);
-	if (!present)
+	if (!bPresent)
 	{
-		lstrcpyW(out, L"no card");
+		lstrcpyW(pszOut, L"no card");
 		return 0;
 	}
-	db = DcBootMap(0);
-	if (db && db->state[DCB_STORE] == DCB_OK && db->result[DCB_STORE][0])
-		lstrcpyW(out, db->result[DCB_STORE]); // capacity from the SD driver
+	pDb = DcBootMap(0);
+	if (pDb && pDb->state[DCB_STORE] == DCB_OK && pDb->result[DCB_STORE][0])
+		lstrcpyW(pszOut, pDb->result[DCB_STORE]); // capacity from the SD driver
 	else
-		lstrcpyW(out, L"ready");
+		lstrcpyW(pszOut, L"ready");
 	return 1;
 }
 
 static void StepStages(void)
 {
-	DcBootShared *db = DcBootMap(0);
-	Stage *st;
-	DWORD now = GetTickCount(), el;
-	if (s_cur >= NSTAGE)
+	DcBootShared *pDb = DcBootMap(0);
+	Stage *pSt;
+	DWORD dwNow = GetTickCount(), dwEl;
+	if (s_nCur >= NSTAGE)
 		return;
-	st = &s_stage[s_cur];
+	pSt = &s_aStage[s_nCur];
 
-	if (st->state == DCB_PENDING)
+	if (pSt->state == DCB_PENDING)
 	{
-		st->state = DCB_ACTIVE;
-		st->start = now;
-		if (st->kind == 1)
+		pSt->state = DCB_ACTIVE;
+		pSt->start = dwNow;
+		if (pSt->kind == 1)
 			KickNetwork();
-		else if (st->kind == 3)
-			s_storeOk = ProbeStorage(st->result);
+		else if (pSt->kind == 3)
+			s_bStoreOk = ProbeStorage(pSt->result);
 	}
-	el = now - st->start;
-	switch (st->kind)
+	dwEl = dwNow - pSt->start;
+	switch (pSt->kind)
 	{
 		case 0:
-			if (el >= MINDWELL)
-				st->state = DCB_OK;
+			if (dwEl >= MINDWELL)
+				pSt->state = DCB_OK;
 			break;
 		case 1:
-			if (db && db->state[DCB_NET] == DCB_OK)
+			if (pDb && pDb->state[DCB_NET] == DCB_OK)
 			{
-				lstrcpyW(st->result, db->result[DCB_NET]);
-				if (el >= MINDWELL)
-					st->state = DCB_OK;
+				lstrcpyW(pSt->result, pDb->result[DCB_NET]);
+				if (dwEl >= MINDWELL)
+					pSt->state = DCB_OK;
 			}
-			else if (el >= NET_TMO)
+			else if (dwEl >= NET_TMO)
 			{
-				lstrcpyW(st->result, L"none");
-				st->state = DCB_FAIL;
+				lstrcpyW(pSt->result, L"none");
+				pSt->state = DCB_FAIL;
 			}
 			break;
 		case 2:
-			if (db && db->state[DCB_ADDR] == DCB_OK)
+			if (pDb && pDb->state[DCB_ADDR] == DCB_OK)
 			{
-				lstrcpyW(st->result, db->result[DCB_ADDR]);
-				if (el >= MINDWELL)
-					st->state = DCB_OK;
+				lstrcpyW(pSt->result, pDb->result[DCB_ADDR]);
+				if (dwEl >= MINDWELL)
+					pSt->state = DCB_OK;
 			}
-			else if (el >= ADDR_TMO)
+			else if (dwEl >= ADDR_TMO)
 			{
-				lstrcpyW(st->result, L"no DHCP");
-				st->state = DCB_FAIL;
+				lstrcpyW(pSt->result, L"no DHCP");
+				pSt->state = DCB_FAIL;
 			}
 			break;
 		case 3:
-			if (el >= MINDWELL)
-				st->state = s_storeOk ? DCB_OK : DCB_FAIL;
+			if (dwEl >= MINDWELL)
+				pSt->state = s_bStoreOk ? DCB_OK : DCB_FAIL;
 			break;
 		case 4:
-			if (el >= 700)
-				s_launch = 1;
+			if (dwEl >= 700)
+				s_bLaunch = 1;
 			break;
 	}
-	if (st->state == DCB_OK || st->state == DCB_FAIL)
-		s_cur++;
-	if (s_skip) // fast-forward to the desktop launch
-		while (s_cur < NSTAGE && s_stage[s_cur].kind != 4)
+	if (pSt->state == DCB_OK || pSt->state == DCB_FAIL)
+		s_nCur++;
+	if (s_bSkip) // fast-forward to the desktop launch
+		while (s_nCur < NSTAGE && s_aStage[s_nCur].kind != 4)
 		{
-			s_stage[s_cur].state = DCB_OK;
-			s_cur++;
+			s_aStage[s_nCur].state = DCB_OK;
+			s_nCur++;
 		}
 }
 
@@ -165,23 +165,24 @@ static void StepStages(void)
 // is the "ASCII/block art" of the real Windows CE logo, no bitmap blit needed.
 static void FlagPane(int x, int y, int w, int h, int shear, COLORREF c)
 {
-	int i, slabs = 5, sh = h / 5;
-	for (i = 0; i < slabs; i++)
+	int i, nSlabs = 5, nSh = h / 5;
+	for (i = 0; i < nSlabs; i++)
 	{
-		int dy = y + i * sh;
-		int dx = x + (shear * (slabs - 1 - i)) / (slabs - 1); // upper slabs leaned right
-		GfxFill(dx, dy, dx + w, dy + sh, c);
+		int dy = y + i * nSh;
+		int dx = x + (shear * (nSlabs - 1 - i)) / (nSlabs - 1); // upper slabs leaned right
+		GfxFill(dx, dy, dx + w, dy + nSh, c);
 	}
 }
 
 // The 4-pane Microsoft flag (red/green/blue/yellow), the heart of the "Windows CE" logo.
 static void DrawFlag(int x, int y)
 {
-	int pw = 22, ph = 20, gap = 5, sh = 6;
-	FlagPane(x, y + 3, pw, ph, sh, RGB(242, 80, 34));                   // red    (top-left)
-	FlagPane(x + pw + gap, y, pw, ph, sh, RGB(127, 186, 0));            // green  (top-right)
-	FlagPane(x, y + ph + gap + 3, pw, ph, sh, RGB(0, 164, 239));        // blue   (bottom-left)
-	FlagPane(x + pw + gap, y + ph + gap, pw, ph, sh, RGB(255, 185, 0)); // yellow (bottom-right)
+	int nPw = 22, nPh = 20, nGap = 5, nSh = 6;
+	FlagPane(x, y + 3, nPw, nPh, nSh, RGB(242, 80, 34));              // red    (top-left)
+	FlagPane(x + nPw + nGap, y, nPw, nPh, nSh, RGB(127, 186, 0));     // green  (top-right)
+	FlagPane(x, y + nPh + nGap + 3, nPw, nPh, nSh, RGB(0, 164, 239)); // blue   (bottom-left)
+	FlagPane(x + nPw + nGap, y + nPh + nGap, nPw, nPh, nSh,
+	         RGB(255, 185, 0)); // yellow (bottom-right)
 }
 
 static COLORREF MarkColor(int state, DWORD t)
@@ -197,67 +198,67 @@ static COLORREF MarkColor(int state, DWORD t)
 
 static void Render(DWORD t)
 {
-	HDC dc;
-	int i, y, done = 0, cx = SCREEN_W / 2;
-	int listX = cx - 175, listW = 350, listTop = 250, row = 30;
-	int flagW = 22 + 5 + 22 + 6; // flag glyph width
-	int wordW = GfxTextWidth(g_FontBold, L"Windows CE");
-	int logoX = cx - (flagW + 14 + wordW) / 2; // [flag] 14px [Windows CE]
+	HDC hdc;
+	int i, y, nDone = 0, nCx = SCREEN_W / 2;
+	int nListX = nCx - 175, nListW = 350, nListTop = 250, nRow = 30;
+	int nFlagW = 22 + 5 + 22 + 6; // flag glyph width
+	int nWordW = GfxTextWidth(g_FontBold, L"Windows CE");
+	int nLogoX = nCx - (nFlagW + 14 + nWordW) / 2; // [flag] 14px [Windows CE]
 
-	GfxFill(0, 0, SCREEN_W, SCREEN_H, C_BG);          // background
-	DrawFlag(logoX, 84);                              // Windows CE flag (block art)
-	GfxFill(listX, 168, listX + listW, 169, C_TRACK); // thin divider under the logo
+	GfxFill(0, 0, SCREEN_W, SCREEN_H, C_BG);             // background
+	DrawFlag(nLogoX, 84);                                // Windows CE flag (block art)
+	GfxFill(nListX, 168, nListX + nListW, 169, C_TRACK); // thin divider under the logo
 
 	for (i = 0; i < NSTAGE; i++) // status mark squares
 	{
-		if (s_stage[i].kind == 4)
+		if (s_aStage[i].kind == 4)
 			continue;
-		y = listTop + i * row;
-		GfxFill(listX, y + 3, listX + 10, y + 13, MarkColor(s_stage[i].state, t));
-		if (s_stage[i].state == DCB_OK || s_stage[i].state == DCB_FAIL)
-			done++;
+		y = nListTop + i * nRow;
+		GfxFill(nListX, y + 3, nListX + 10, y + 13, MarkColor(s_aStage[i].state, t));
+		if (s_aStage[i].state == DCB_OK || s_aStage[i].state == DCB_FAIL)
+			nDone++;
 	}
 
-	GfxFill(listX, 432, listX + listW, 438, C_TRACK); // progress track
-	GfxFill(listX, 432, listX + (listW * done) / NROWS, 438, C_ORANGE);
+	GfxFill(nListX, 432, nListX + nListW, 438, C_TRACK); // progress track
+	GfxFill(nListX, 432, nListX + (nListW * nDone) / NROWS, 438, C_ORANGE);
 
-	dc = GfxLockDC();
-	GfxText(dc, logoX + flagW + 14, 96, C_WHITE, C_BG, g_FontBold, L"Windows CE");
-	GfxText(dc, cx - GfxTextWidth(g_FontUI, L"Dreamcast Community Edition") / 2, 140, C_BLUE, C_BG,
-	        g_FontUI, L"Dreamcast Community Edition");
+	hdc = GfxLockDC();
+	GfxText(hdc, nLogoX + nFlagW + 14, 96, C_WHITE, C_BG, g_FontBold, L"Windows CE");
+	GfxText(hdc, nCx - GfxTextWidth(g_FontUI, L"Dreamcast Community Edition") / 2, 140, C_BLUE,
+	        C_BG, g_FontUI, L"Dreamcast Community Edition");
 	for (i = 0; i < NSTAGE; i++)
 	{
-		Stage *st = &s_stage[i];
+		Stage *pSt = &s_aStage[i];
 		COLORREF lc;
-		if (st->kind == 4)
+		if (pSt->kind == 4)
 			continue;
-		y = listTop + i * row;
-		lc = st->state == DCB_ACTIVE ? C_WHITE : (st->state == DCB_PENDING ? C_SUBTLE : C_MUTED);
-		GfxText(dc, listX + 22, y, lc, C_BG, g_FontUI, st->label);
-		if (st->result[0])
-			GfxText(dc, listX + listW - GfxTextWidth(g_FontUI, st->result), y,
-			        st->state == DCB_FAIL ? C_RED : C_BLUE, C_BG, g_FontUI, st->result);
+		y = nListTop + i * nRow;
+		lc = pSt->state == DCB_ACTIVE ? C_WHITE : (pSt->state == DCB_PENDING ? C_SUBTLE : C_MUTED);
+		GfxText(hdc, nListX + 22, y, lc, C_BG, g_FontUI, pSt->label);
+		if (pSt->result[0])
+			GfxText(hdc, nListX + nListW - GfxTextWidth(g_FontUI, pSt->result), y,
+			        pSt->state == DCB_FAIL ? C_RED : C_BLUE, C_BG, g_FontUI, pSt->result);
 	}
-	GfxText(dc, listX, 446, C_SUBTLE, C_BG, g_FontUI, L"SH-4 - retail");
-	GfxText(dc, listX + listW - GfxTextWidth(g_FontUI, L"DCWin"), 446, C_SUBTLE, C_BG, g_FontUI,
+	GfxText(hdc, nListX, 446, C_SUBTLE, C_BG, g_FontUI, L"SH-4 - retail");
+	GfxText(hdc, nListX + nListW - GfxTextWidth(g_FontUI, L"DCWin"), 446, C_SUBTLE, C_BG, g_FontUI,
 	        L"DCWin");
-	GfxUnlockDC(dc);
+	GfxUnlockDC(hdc);
 }
 
-static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+static LRESULT CALLBACK WndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
-	if (msg == WM_KEYDOWN)
+	if (uMsg == WM_KEYDOWN)
 	{
-		s_skip = 1;
+		s_bSkip = 1;
 		return 0;
 	}
-	return DefWindowProcW(hwnd, msg, wp, lp);
+	return DefWindowProcW(hWnd, uMsg, wParam, lParam);
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 {
 	WNDCLASSW wc;
-	HWND hwnd;
+	HWND hWnd;
 	MSG msg;
 	PROCESS_INFORMATION pi;
 
@@ -267,12 +268,12 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 	wc.hbrBackground = NULL;
 	wc.lpszClassName = L"DCWBOOT";
 	RegisterClassW(&wc);
-	hwnd = CreateWindowExW(0, L"DCWBOOT", L"DCWin", WS_VISIBLE, 0, 0, SCREEN_W, SCREEN_H, NULL,
+	hWnd = CreateWindowExW(0, L"DCWBOOT", L"DCWin", WS_VISIBLE, 0, 0, SCREEN_W, SCREEN_H, NULL,
 	                       NULL, hInst, NULL);
 
-	if (hwnd && GfxInit(hwnd))
+	if (hWnd && GfxInit(hWnd))
 	{
-		while (!s_launch)
+		while (!s_bLaunch)
 		{
 			while (PeekMessageW(&msg, 0, 0, 0, PM_REMOVE))
 			{
