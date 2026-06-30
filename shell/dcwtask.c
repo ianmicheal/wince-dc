@@ -45,6 +45,14 @@ static int g_nDrawnOnce = 0; // publish the first frame even if nothing "changed
 static int g_nMemScan = 999; // incremental mem-walk cursor over visible rows (>=ROWS = done)
 static WCHAR g_awchStatus[44] = L"";
 
+// Right-click (VK_APPS from the shell) context menu.
+#define MENU_N  2
+#define MENU_W  104
+#define MENU_RH 16
+static int g_bMenu = 0; // context menu open
+static int g_nMenuX, g_nMenuY, g_nMenuSel;
+static const WCHAR *const s_aMenu[MENU_N] = {L"End Task", L"Refresh"};
+
 static const WCHAR *Base(const WCHAR *psz)
 {
 	const WCHAR *pszB = psz;
@@ -230,9 +238,61 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 		int i, y, nChanged = 0, nCw = CW, nCh = CH;
 		nChanged |= DCWinClientSize(w, &nCw, &nCh); // resize/maximize -> redraw to fit
 
+		// Pointer hover: highlight the process row (or menu item) under the cursor. The shell
+		// synthesizes VK_RETURN on a body click, so opening it is handled in the key loop below.
+		{
+			int px = 0, py = 0, btn = 0;
+			if (DCWinGetPointer(w, &px, &py, &btn))
+			{
+				if (g_bMenu)
+				{
+					if (px >= g_nMenuX && px < g_nMenuX + MENU_W && py >= g_nMenuY + 2 &&
+					    py < g_nMenuY + 2 + MENU_N * MENU_RH)
+					{
+						int m = (py - (g_nMenuY + 2)) / MENU_RH;
+						if (m != g_nMenuSel)
+						{
+							g_nMenuSel = m;
+							nChanged = 1;
+						}
+					}
+				}
+				else if (py >= LISTY)
+				{
+					int row = g_nTop + (py - LISTY) / ROWH;
+					if (row >= 0 && row < g_n && row < g_nTop + ROWS && row != g_nSel)
+					{
+						g_nSel = row;
+						nChanged = 1;
+					}
+				}
+			}
+		}
 		while (DCWinPollKey(w, &dwKey))
 		{
 			int nOtop = g_nTop;
+			if (g_bMenu) // context menu captures keys
+			{
+				if (dwKey == VK_UP && g_nMenuSel > 0)
+					g_nMenuSel--;
+				else if (dwKey == VK_DOWN && g_nMenuSel < MENU_N - 1)
+					g_nMenuSel++;
+				else if (dwKey == VK_APPS) // right-click again: dismiss
+					g_bMenu = 0;
+				else if (dwKey == VK_RETURN) // click/Enter: run the item, unless clicked off-menu
+				{
+					int px = 0, py = 0, btn = 0, bOff = 0;
+					if (DCWinGetPointer(w, &px, &py, &btn))
+						bOff = !(px >= g_nMenuX && px < g_nMenuX + MENU_W && py >= g_nMenuY &&
+						         py < g_nMenuY + 2 + MENU_N * MENU_RH);
+					g_bMenu = 0;
+					if (!bOff && g_nMenuSel == 0)
+						EndTask();
+					Scan();
+				}
+				nChanged = 1;
+				continue;
+			}
 			if (dwKey == VK_UP && g_nSel > 0)
 				g_nSel--;
 			else if (dwKey == VK_DOWN && g_nSel < g_n - 1)
@@ -241,6 +301,23 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 			{
 				EndTask();
 				Scan();
+			}
+			else if (dwKey == VK_APPS) // right-click -> open the context menu at the cursor
+			{
+				int px = CW / 2, py = LISTY, btn = 0;
+				DCWinGetPointer(w, &px, &py, &btn);
+				if (px > CW - MENU_W)
+					px = CW - MENU_W;
+				if (py > CH - (MENU_N * MENU_RH + 6))
+					py = CH - (MENU_N * MENU_RH + 6);
+				if (px < 0)
+					px = 0;
+				if (py < LISTY)
+					py = LISTY;
+				g_nMenuX = px;
+				g_nMenuY = py;
+				g_nMenuSel = 0;
+				g_bMenu = 1;
 			}
 			if (g_nSel < g_nTop)
 				g_nTop = g_nSel;
@@ -305,6 +382,24 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 			DCWinText(w, 8, y, RGB(0, 0, 0), RGB(192, 192, 192), awchRow);
 			if (g_awchStatus[0])
 				DCWinText(w, 8, y + ROWH, RGB(128, 0, 0), RGB(192, 192, 192), g_awchStatus);
+			if (g_bMenu) // context menu popup, on top of the list
+			{
+				int mi, h = MENU_N * MENU_RH + 4;
+				DCWinFill(w, g_nMenuX, g_nMenuY, MENU_W, h, RGB(192, 192, 192));
+				DCWinFill(w, g_nMenuX, g_nMenuY, MENU_W, 1, RGB(64, 64, 64));
+				DCWinFill(w, g_nMenuX, g_nMenuY + h - 1, MENU_W, 1, RGB(64, 64, 64));
+				DCWinFill(w, g_nMenuX, g_nMenuY, 1, h, RGB(64, 64, 64));
+				DCWinFill(w, g_nMenuX + MENU_W - 1, g_nMenuY, 1, h, RGB(64, 64, 64));
+				for (mi = 0; mi < MENU_N; mi++)
+				{
+					int my = g_nMenuY + 2 + mi * MENU_RH;
+					COLORREF bg = (mi == g_nMenuSel) ? RGB(0, 0, 128) : RGB(192, 192, 192);
+					COLORREF fg = (mi == g_nMenuSel) ? RGB(255, 255, 255) : RGB(0, 0, 0);
+					if (mi == g_nMenuSel)
+						DCWinFill(w, g_nMenuX + 2, my, MENU_W - 4, MENU_RH, bg);
+					DCWinText(w, g_nMenuX + 6, my + 1, fg, bg, s_aMenu[mi]);
+				}
+			}
 			DCWinEndFrame(w);
 		}
 

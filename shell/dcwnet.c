@@ -25,6 +25,7 @@
 #define C_KEY   RGB(176, 176, 176)
 #define C_KEYF  RGB(224, 224, 224)
 #define C_BTN   RGB(0, 0, 128)
+#define C_HOT   RGB(170, 200, 255) // pointer-hover highlight for OSK keys
 #define C_OK    RGB(0, 112, 0)
 #define C_FAIL  RGB(176, 0, 0)
 #define C_INFO  RGB(0, 0, 160)
@@ -751,6 +752,8 @@ static const Btn s_btn[B_COUNT] = {
     {326, 44, L"Get", C_BTN},   {374, 86, L"HangUp", C_BTN},
 };
 
+static int g_nHotR = -1, g_nHotC = -1, g_nHotBtn = -1; // OSK key / button under the cursor (hover)
+
 static void EditAppendCh(WCHAR ch)
 {
 	int n = lstrlenW(g_pszTarget);
@@ -867,8 +870,9 @@ static void Draw(DCWin *w, int cw, int ch)
 			int kx = KOX + c * (KW + KGAP), ky = KOY + r * (KH + KGAP);
 			k[0] = kbRows[r][c];
 			k[1] = 0;
-			DCWinFill(w, kx, ky, KW, KH, C_KEYF);
-			DCWinText(w, kx + 11, ky + 3, C_BLACK, C_KEYF, k);
+			DCWinFill(w, kx, ky, KW, KH, (r == g_nHotR && c == g_nHotC) ? C_HOT : C_KEYF);
+			DCWinText(w, kx + 11, ky + 3, C_BLACK, (r == g_nHotR && c == g_nHotC) ? C_HOT : C_KEYF,
+			          k);
 		}
 	// buttons
 	for (i = 0; i < B_COUNT; i++)
@@ -876,6 +880,13 @@ static void Draw(DCWin *w, int cw, int ch)
 		COLORREF bg = s_btn[i].c, fg = (bg == C_BTN) ? C_WHITE : C_BLACK;
 		DCWinFill(w, s_btn[i].x, BTN_Y, s_btn[i].w, KH, bg);
 		DCWinText(w, s_btn[i].x + 5, BTN_Y + 3, fg, bg, s_btn[i].label);
+		if (i == g_nHotBtn) // hover: white outline
+		{
+			DCWinFill(w, s_btn[i].x, BTN_Y, s_btn[i].w, 1, C_WHITE);
+			DCWinFill(w, s_btn[i].x, BTN_Y + KH - 1, s_btn[i].w, 1, C_WHITE);
+			DCWinFill(w, s_btn[i].x, BTN_Y, 1, KH, C_WHITE);
+			DCWinFill(w, s_btn[i].x + s_btn[i].w - 1, BTN_Y, 1, KH, C_WHITE);
+		}
 	}
 
 	// download progress bar (shown once a Get has run)
@@ -944,6 +955,32 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 
 		if (DCWinGetPointer(w, &px, &py, &nBtn)) // analog-stick cursor over our window
 		{
+			int r, c, i, hr = -1, hc = -1, hb = -1; // hover hit-test (OSK key / button)
+			for (r = 0; r < 4 && hr < 0; r++)
+				for (c = 0; c < KCOLS; c++)
+				{
+					int kx = KOX + c * (KW + KGAP), ky = KOY + r * (KH + KGAP);
+					if (px >= kx && px < kx + KW && py >= ky && py < ky + KH)
+					{
+						hr = r;
+						hc = c;
+						break;
+					}
+				}
+			for (i = 0; i < B_COUNT; i++)
+				if (px >= s_btn[i].x && px < s_btn[i].x + s_btn[i].w && py >= BTN_Y &&
+				    py < BTN_Y + KH)
+				{
+					hb = i;
+					break;
+				}
+			if (hr != g_nHotR || hc != g_nHotC || hb != g_nHotBtn)
+			{
+				g_nHotR = hr;
+				g_nHotC = hc;
+				g_nHotBtn = hb;
+				bDirty = 1;
+			}
 			if (nBtn && !nPrevBtn)
 			{
 				if (HandleClick(px, py))
@@ -952,7 +989,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 			nPrevBtn = nBtn;
 		}
 		else
+		{
+			if (g_nHotR != -1 || g_nHotBtn != -1) // cursor left the window: clear the hover
+			{
+				g_nHotR = g_nHotC = g_nHotBtn = -1;
+				bDirty = 1;
+			}
 			nPrevBtn = 0;
+		}
 
 		if (PollDial())
 			bDirty = 1; // advance a modem dial in progress

@@ -229,6 +229,25 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 	for (;;)
 	{
 		int bChanged = 0;
+		// Pointer hover: highlight the row under the cursor (matches D-pad selection). The shell
+		// synthesizes VK_RETURN on a body click, so opening the hovered item is handled below via
+		// HandleKey - we just keep g_nSel tracking the cursor.
+		{
+			int px = 0, py = 0, btn = 0, nCw = EW, nCh = EH, nVis, row;
+			if (DCWinGetPointer(pWin, &px, &py, &btn) && py >= 18)
+			{
+				DCWinClientSize(pWin, &nCw, &nCh);
+				nVis = (nCh - 18) / EROW;
+				if (nVis < 1)
+					nVis = 1;
+				row = g_nTop + (py - 18) / EROW;
+				if (row >= 0 && row < g_nCount && row < g_nTop + nVis && row != g_nSel)
+				{
+					g_nSel = row;
+					bChanged = 1;
+				}
+			}
+		}
 		while (DCWinPollKey(pWin, &dwKey))
 		{
 			HandleKey(dwKey);
