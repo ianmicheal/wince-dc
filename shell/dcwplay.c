@@ -3,7 +3,7 @@
 // spectrum analyzer, transport, seek + volume bars - clickable via the analog-stick pointer
 // (DCWinGetPointer) plus keyboard shortcuts.
 //
-// Audio is STREAMED from the file through a small fixed buffer (g_sbuf, 32 KB) - NOT loaded
+// Audio is STREAMED from the file through a small fixed buffer (g_abSbuf, 32 KB) - NOT loaded
 // whole - so an 8 MB MP3 costs ~32 KB of RAM, not 8 MB. The decoder pulls bytes on demand: WAV
 // straight from the data chunk, MP3 via minimp3 (vendor/minimp3) frame-by-frame. Decoded PCM is
 // pushed into a 1-second looping DirectSound ring (primed once, then refilled behind the play
@@ -32,46 +32,46 @@
 
 // ---- logging ------------------------------------------------------------------------
 #define LOG(s) OutputDebugStringW(L"DCWPLAY: " s L"\r\n")
-static void Logf(const WCHAR *fmt, ...)
+static void Logf(const WCHAR *pszFmt, ...)
 {
-	WCHAR b[160];
+	WCHAR ab[160];
 	va_list ap;
-	va_start(ap, fmt);
-	wvsprintfW(b, fmt, ap);
+	va_start(ap, pszFmt);
+	wvsprintfW(ab, pszFmt, ap);
 	va_end(ap);
-	OutputDebugStringW(b);
+	OutputDebugStringW(ab);
 }
 
 // ---- audio state --------------------------------------------------------------------
-static LPDIRECTSOUND g_ds;
-static LPDIRECTSOUNDBUFFER g_buf;
+static LPDIRECTSOUND g_pDs;
+static LPDIRECTSOUNDBUFFER g_pBuf;
 static HWND g_hwndHidden;
-static DWORD g_bufBytes; // DSound ring size
-static DWORD g_writePos; // next byte we'll write into the ring
-static int g_rate = 44100, g_ch = 2;
-static volatile int g_playing, g_eof;
-static volatile DWORD g_played; // total stereo frames written to the card
-static DWORD g_totalFrames;     // est. total frames (for the seek bar)
-static int g_vol = 80;          // 0..100
+static DWORD g_dwBufBytes; // DSound ring size
+static DWORD g_dwWritePos; // next byte we'll write into the ring
+static int g_nRate = 44100, g_nCh = 2;
+static volatile int g_nPlaying, g_nEof;
+static volatile DWORD g_dwPlayed; // total stereo frames written to the card
+static DWORD g_dwTotalFrames;     // est. total frames (for the seek bar)
+static int g_nVol = 80;           // 0..100
 
 // ---- streaming source (no whole-file load) ------------------------------------------
-static HANDLE g_file = INVALID_HANDLE_VALUE;
-static DWORD g_size;      // total file size (for the seek bar)
-static DWORD g_streamPos; // file bytes consumed by the decoder (seek bar)
+static HANDLE g_hFile = INVALID_HANDLE_VALUE;
+static DWORD g_dwSize;      // total file size (for the seek bar)
+static DWORD g_dwStreamPos; // file bytes consumed by the decoder (seek bar)
 #define SBUF (32 * 1024)
-static BYTE g_sbuf[SBUF];
-static int g_sN, g_sP;    // valid bytes / consume cursor within g_sbuf
+static BYTE g_abSbuf[SBUF];
+static int g_nSN, g_nSP;  // valid bytes / consume cursor within g_abSbuf
 #define MP3_MAXFRAME 2881 // worst-case MPEG frame; keep this much buffered
 
-static int g_isMp3;
-static DWORD g_wavOff, g_wavEnd; // WAV PCM byte window (absolute file offsets)
-static int g_wavBits = 16, g_wavCh = 2;
+static int g_nIsMp3;
+static DWORD g_dwWavOff, g_dwWavEnd; // WAV PCM byte window (absolute file offsets)
+static int g_nWavBits = 16, g_nWavCh = 2;
 static mp3dec_t g_mp3;
 // One decoded MPEG frame held as stereo 16-bit PCM. mp3dec yields a fixed 1152-frame block, but
 // the ring asks for arbitrary frame counts; we drain this across Decode() calls so the ring is
 // filled CONTINUOUSLY (no silence padding for the maxFrames-mod-1152 tail -> no clicks/slowdown).
-static short g_pcm[1152 * 2];
-static int g_pcmN, g_pcmP; // valid frames / consume cursor within g_pcm
+static short g_aspcm[1152 * 2];
+static int g_nPcmN, g_nPcmP; // valid frames / consume cursor within g_aspcm
 
 // Output resampler. The AICA's native rate is EXACTLY 44100 Hz (22.5792 MHz / 512), and only that
 // rate is reliably pitch-accurate through the DC's mixerless DirectSound (a 48 kHz buffer plays a
@@ -80,205 +80,205 @@ static int g_pcmN, g_pcmP; // valid frames / consume cursor within g_pcm
 // 48000 downsamples; 22050 upsamples. Phase is 16.16 fixed-point; the interp weight is 8-bit so the
 // (nxt-cur)*weight product can't overflow int32.
 #define OUT_RATE 44100
-static int g_srcRate = OUT_RATE;                     // decoded source sample rate
-static unsigned g_rsStep;                            // source frames per output frame, 16.16
-static unsigned g_rsPhase;                           // fractional source position [0,1), 16.16
-static short g_rsCurL, g_rsCurR, g_rsNxtL, g_rsNxtR; // bracketing source frames
-static int g_rsPrimed, g_srcEof;                     // resampler loaded? / source exhausted?
+static int g_nSrcRate = OUT_RATE;                        // decoded source sample rate
+static unsigned g_dwRsStep;                              // source frames per output frame, 16.16
+static unsigned g_dwRsPhase;                             // fractional source position [0,1), 16.16
+static short g_sRsCurL, g_sRsCurR, g_sRsNxtL, g_sRsNxtR; // bracketing source frames
+static int g_nRsPrimed, g_nSrcEof;                       // resampler loaded? / source exhausted?
 
-static WCHAR g_track[80] = L"(no file)";
+static WCHAR g_aszTrack[80] = L"(no file)";
 
 // viz: mono window of the most recent samples (decoder writes, UI reads)
 #define VIZN 256
-static short g_viz[VIZN];
-static volatile int g_vizW;
+static short g_asViz[VIZN];
+static volatile int g_nVizW;
 
 // dst < src (we always slide toward the front), so a forward byte copy is safe (no memmove dep).
-static void Slide(BYTE *d, const BYTE *s, int n)
+static void Slide(BYTE *pbDst, const BYTE *pbSrc, int n)
 {
 	int i;
 	for (i = 0; i < n; i++)
-		d[i] = s[i];
+		pbDst[i] = pbSrc[i];
 }
 
-// Slide the unconsumed bytes to the front and read more from the file. After this, g_sbuf
-// holds [0, g_sN) valid bytes and g_sP is reset toward 0.
+// Slide the unconsumed bytes to the front and read more from the file. After this, g_abSbuf
+// holds [0, g_nSN) valid bytes and g_nSP is reset toward 0.
 static void StreamFill(void)
 {
-	DWORD got = 0;
-	int rem;
-	if (g_file == INVALID_HANDLE_VALUE)
+	DWORD dwGot = 0;
+	int nRem;
+	if (g_hFile == INVALID_HANDLE_VALUE)
 		return;
-	rem = g_sN - g_sP;
-	if (g_sP > 0)
+	nRem = g_nSN - g_nSP;
+	if (g_nSP > 0)
 	{
-		if (rem > 0)
-			Slide(g_sbuf, g_sbuf + g_sP, rem);
-		g_sN = rem;
-		g_sP = 0;
+		if (nRem > 0)
+			Slide(g_abSbuf, g_abSbuf + g_nSP, nRem);
+		g_nSN = nRem;
+		g_nSP = 0;
 	}
-	if (g_sN < SBUF)
+	if (g_nSN < SBUF)
 	{
-		ReadFile(g_file, g_sbuf + g_sN, (DWORD)(SBUF - g_sN), &got, 0);
-		g_sN += (int)got;
+		ReadFile(g_hFile, g_abSbuf + g_nSN, (DWORD)(SBUF - g_nSN), &dwGot, 0);
+		g_nSN += (int)dwGot;
 	}
 }
 
 // ---- helpers ------------------------------------------------------------------------
-static void PushViz(const short *stereo, int frames)
+static void PushViz(const short *psStereo, int nFrames)
 {
-	int i, w = g_vizW;
-	for (i = 0; i < frames; i++)
+	int i, nW = g_nVizW;
+	for (i = 0; i < nFrames; i++)
 	{
-		g_viz[w & (VIZN - 1)] = (short)((stereo[i * 2] + stereo[i * 2 + 1]) >> 1);
-		w++;
+		g_asViz[nW & (VIZN - 1)] = (short)((psStereo[i * 2] + psStereo[i * 2 + 1]) >> 1);
+		nW++;
 	}
-	g_vizW = w;
+	g_nVizW = nW;
 }
 
 // Configure the resampler for a (newly discovered) source rate. Output is always OUT_RATE.
-static void SetSrcRate(int srcRate)
+static void SetSrcRate(int nSrcRate)
 {
-	g_srcRate = srcRate > 0 ? srcRate : OUT_RATE;
-	g_rate = OUT_RATE; // the AICA buffer always runs at 44100
-	g_rsStep = ((unsigned)g_srcRate << 16) / (unsigned)OUT_RATE; // fits u32 for any sane rate
+	g_nSrcRate = nSrcRate > 0 ? nSrcRate : OUT_RATE;
+	g_nRate = OUT_RATE; // the AICA buffer always runs at 44100
+	g_dwRsStep = ((unsigned)g_nSrcRate << 16) / (unsigned)OUT_RATE; // fits u32 for any sane rate
 }
 
-// Pull one decoded source frame (stereo 16-bit, at g_srcRate). Returns 0 at end of stream.
-static int SrcNext(short *l, short *r)
+// Pull one decoded source frame (stereo 16-bit, at g_nSrcRate). Returns 0 at end of stream.
+static int SrcNext(short *psL, short *psR)
 {
-	if (g_isMp3)
+	if (g_nIsMp3)
 	{
-		while (g_pcmN - g_pcmP <= 0) // need another MPEG frame
+		while (g_nPcmN - g_nPcmP <= 0) // need another MPEG frame
 		{
 			mp3dec_frame_info_t fi;
-			short tmp[MINIMP3_MAX_SAMPLES_PER_FRAME];
+			short asTmp[MINIMP3_MAX_SAMPLES_PER_FRAME];
 			int n, i;
-			if (g_sN - g_sP < MP3_MAXFRAME)
+			if (g_nSN - g_nSP < MP3_MAXFRAME)
 				StreamFill();
-			if (g_sN - g_sP <= 0)
+			if (g_nSN - g_nSP <= 0)
 				return 0; // end of file
-			n = mp3dec_decode_frame(&g_mp3, g_sbuf + g_sP, g_sN - g_sP, tmp, &fi);
+			n = mp3dec_decode_frame(&g_mp3, g_abSbuf + g_nSP, g_nSN - g_nSP, asTmp, &fi);
 			if (fi.frame_bytes == 0)
 				return 0; // not enough data (EOF)
-			g_sP += fi.frame_bytes;
-			g_streamPos += (DWORD)fi.frame_bytes;
+			g_nSP += fi.frame_bytes;
+			g_dwStreamPos += (DWORD)fi.frame_bytes;
 			if (n == 0)
 				continue; // header/ID3 skip, no PCM
 			for (i = 0; i < n; i++)
 			{
-				short L = tmp[i * fi.channels],
-				      R = (fi.channels > 1) ? tmp[i * fi.channels + 1] : L;
-				g_pcm[i * 2] = L;
-				g_pcm[i * 2 + 1] = R;
+				short sL = asTmp[i * fi.channels],
+				      sR = (fi.channels > 1) ? asTmp[i * fi.channels + 1] : sL;
+				g_aspcm[i * 2] = sL;
+				g_aspcm[i * 2 + 1] = sR;
 			}
-			g_pcmN = n;
-			g_pcmP = 0;
+			g_nPcmN = n;
+			g_nPcmP = 0;
 		}
-		*l = g_pcm[g_pcmP * 2];
-		*r = g_pcm[g_pcmP * 2 + 1];
-		g_pcmP++;
+		*psL = g_aspcm[g_nPcmP * 2];
+		*psR = g_aspcm[g_nPcmP * 2 + 1];
+		g_nPcmP++;
 		return 1;
 	}
 	else
 	{
-		int bps = (g_wavBits / 8) * (g_wavCh ? g_wavCh : 1);
-		const BYTE *s;
-		if (g_streamPos + (DWORD)bps > g_wavEnd)
+		int nBps = (g_nWavBits / 8) * (g_nWavCh ? g_nWavCh : 1);
+		const BYTE *pb;
+		if (g_dwStreamPos + (DWORD)nBps > g_dwWavEnd)
 			return 0;
-		if (g_sN - g_sP < bps)
+		if (g_nSN - g_nSP < nBps)
 			StreamFill();
-		if (g_sN - g_sP < bps)
+		if (g_nSN - g_nSP < nBps)
 			return 0;
-		s = g_sbuf + g_sP;
-		if (g_wavBits == 16)
+		pb = g_abSbuf + g_nSP;
+		if (g_nWavBits == 16)
 		{
-			*l = (short)(s[0] | (s[1] << 8));
-			*r = (g_wavCh > 1) ? (short)(s[2] | (s[3] << 8)) : *l;
+			*psL = (short)(pb[0] | (pb[1] << 8));
+			*psR = (g_nWavCh > 1) ? (short)(pb[2] | (pb[3] << 8)) : *psL;
 		}
 		else
 		{
-			*l = (short)((s[0] - 128) << 8);
-			*r = (g_wavCh > 1) ? (short)((s[1] - 128) << 8) : *l;
+			*psL = (short)((pb[0] - 128) << 8);
+			*psR = (g_nWavCh > 1) ? (short)((pb[1] - 128) << 8) : *psL;
 		}
-		g_sP += bps;
-		g_streamPos += (DWORD)bps;
+		g_nSP += nBps;
+		g_dwStreamPos += (DWORD)nBps;
 		return 1;
 	}
 }
 
 // Produce up to maxFrames OUTPUT frames (at OUT_RATE), linearly resampling the source. 0 = EOF.
-static int Decode(short *out, int maxFrames)
+static int Decode(short *psOut, int nMaxFrames)
 {
-	int got = 0;
-	if (g_file == INVALID_HANDLE_VALUE || g_srcEof)
+	int nGot = 0;
+	if (g_hFile == INVALID_HANDLE_VALUE || g_nSrcEof)
 		return 0;
-	if (!g_rsPrimed) // load the first two source frames
+	if (!g_nRsPrimed) // load the first two source frames
 	{
-		if (!SrcNext(&g_rsCurL, &g_rsCurR))
+		if (!SrcNext(&g_sRsCurL, &g_sRsCurR))
 		{
-			g_srcEof = 1;
+			g_nSrcEof = 1;
 			return 0;
 		}
-		if (!SrcNext(&g_rsNxtL, &g_rsNxtR))
+		if (!SrcNext(&g_sRsNxtL, &g_sRsNxtR))
 		{
-			g_rsNxtL = g_rsCurL;
-			g_rsNxtR = g_rsCurR;
+			g_sRsNxtL = g_sRsCurL;
+			g_sRsNxtR = g_sRsCurR;
 		}
-		g_rsPhase = 0;
-		g_rsPrimed = 1;
+		g_dwRsPhase = 0;
+		g_nRsPrimed = 1;
 	}
-	while (got < maxFrames)
+	while (nGot < nMaxFrames)
 	{
-		int f = (int)((g_rsPhase >> 8) & 0xff); // 8-bit interp weight (no int32 overflow)
-		out[got * 2] = (short)(g_rsCurL + (((int)(g_rsNxtL - g_rsCurL) * f) >> 8));
-		out[got * 2 + 1] = (short)(g_rsCurR + (((int)(g_rsNxtR - g_rsCurR) * f) >> 8));
-		got++;
-		g_rsPhase += g_rsStep;
-		while (g_rsPhase >= 0x10000) // step past whole source frames
+		int nF = (int)((g_dwRsPhase >> 8) & 0xff); // 8-bit interp weight (no int32 overflow)
+		psOut[nGot * 2] = (short)(g_sRsCurL + (((int)(g_sRsNxtL - g_sRsCurL) * nF) >> 8));
+		psOut[nGot * 2 + 1] = (short)(g_sRsCurR + (((int)(g_sRsNxtR - g_sRsCurR) * nF) >> 8));
+		nGot++;
+		g_dwRsPhase += g_dwRsStep;
+		while (g_dwRsPhase >= 0x10000) // step past whole source frames
 		{
-			g_rsPhase -= 0x10000;
-			g_rsCurL = g_rsNxtL;
-			g_rsCurR = g_rsNxtR;
-			if (!SrcNext(&g_rsNxtL, &g_rsNxtR))
+			g_dwRsPhase -= 0x10000;
+			g_sRsCurL = g_sRsNxtL;
+			g_sRsCurR = g_sRsNxtR;
+			if (!SrcNext(&g_sRsNxtL, &g_sRsNxtR))
 			{
-				g_srcEof = 1;
-				g_rsNxtL = g_rsCurL;
-				g_rsNxtR = g_rsCurR;
+				g_nSrcEof = 1;
+				g_sRsNxtL = g_sRsCurL;
+				g_sRsNxtR = g_sRsCurR;
 			}
 		}
-		if (g_srcEof)
+		if (g_nSrcEof)
 			break; // source exhausted
 	}
-	if (got)
-		PushViz(out, got);
-	return got;
+	if (nGot)
+		PushViz(psOut, nGot);
+	return nGot;
 }
 
 // Reset the decoder + stream to the start of audio (re-seek the file, drop the buffer).
 static void DecoderReset(void)
 {
-	if (g_file == INVALID_HANDLE_VALUE)
+	if (g_hFile == INVALID_HANDLE_VALUE)
 		return;
-	if (g_isMp3)
+	if (g_nIsMp3)
 	{
 		mp3dec_init(&g_mp3);
-		SetFilePointer(g_file, 0, 0, FILE_BEGIN);
-		g_streamPos = 0;
+		SetFilePointer(g_hFile, 0, 0, FILE_BEGIN);
+		g_dwStreamPos = 0;
 	}
 	else
 	{
-		SetFilePointer(g_file, (LONG)g_wavOff, 0, FILE_BEGIN);
-		g_streamPos = g_wavOff;
+		SetFilePointer(g_hFile, (LONG)g_dwWavOff, 0, FILE_BEGIN);
+		g_dwStreamPos = g_dwWavOff;
 	}
-	g_sN = g_sP = 0;
-	g_pcmN = g_pcmP = 0;
-	g_rsPrimed = 0;
-	g_rsPhase = 0;
-	g_srcEof = 0;
-	g_played = 0;
-	g_eof = 0;
-	g_vizW = 0;
+	g_nSN = g_nSP = 0;
+	g_nPcmN = g_nPcmP = 0;
+	g_nRsPrimed = 0;
+	g_dwRsPhase = 0;
+	g_nSrcEof = 0;
+	g_dwPlayed = 0;
+	g_nEof = 0;
+	g_nVizW = 0;
 }
 
 // Decode the first MP3 frame to learn the true sample rate/channel count BEFORE we size the AICA
@@ -287,29 +287,29 @@ static void DecoderReset(void)
 // 44.1 kHz buffer is ~1.5 semitones flat). Caller must DecoderReset() afterward to rewind.
 static void ProbeMp3Rate(void)
 {
-	short tmp[MINIMP3_MAX_SAMPLES_PER_FRAME];
+	short asTmp[MINIMP3_MAX_SAMPLES_PER_FRAME];
 	mp3dec_frame_info_t fi;
-	int tries;
-	for (tries = 0; tries < 16; tries++)
+	int nTries;
+	for (nTries = 0; nTries < 16; nTries++)
 	{
 		int n;
-		if (g_sN - g_sP < MP3_MAXFRAME)
+		if (g_nSN - g_nSP < MP3_MAXFRAME)
 			StreamFill();
-		if (g_sN - g_sP <= 0)
+		if (g_nSN - g_nSP <= 0)
 			break;
-		n = mp3dec_decode_frame(&g_mp3, g_sbuf + g_sP, g_sN - g_sP, tmp, &fi);
+		n = mp3dec_decode_frame(&g_mp3, g_abSbuf + g_nSP, g_nSN - g_nSP, asTmp, &fi);
 		if (fi.frame_bytes == 0)
 			break;
-		g_sP += fi.frame_bytes;
+		g_nSP += fi.frame_bytes;
 		if (n > 0 && fi.hz > 0)
 		{
 			SetSrcRate(fi.hz);
-			g_ch = fi.channels; // output stays at OUT_RATE; resample the rest
-			if (g_totalFrames == 0 &&
+			g_nCh = fi.channels; // output stays at OUT_RATE; resample the rest
+			if (g_dwTotalFrames == 0 &&
 			    fi.bitrate_kbps > 0) // estimate length (in OUTPUT frames) from CBR
 			{
-				DWORD secs = (g_size / 125) / (DWORD)fi.bitrate_kbps;
-				g_totalFrames = secs * (DWORD)OUT_RATE;
+				DWORD dwSecs = (g_dwSize / 125) / (DWORD)fi.bitrate_kbps;
+				g_dwTotalFrames = dwSecs * (DWORD)OUT_RATE;
 			}
 			Logf(L"DCWPLAY: MP3 src=%dHz ch=%d br=%dk -> out %dHz\r\n", fi.hz, fi.channels,
 			     fi.bitrate_kbps, OUT_RATE);
@@ -330,22 +330,22 @@ static int DsInit(void)
 	RegisterClassW(&wc);
 	g_hwndHidden =
 	    CreateWindowExW(0, L"DCWPLAYDS", L"", 0, 0, 0, 0, 0, NULL, NULL, wc.hInstance, NULL);
-	hr = DirectSoundCreate(NULL, &g_ds, NULL);
-	Logf(L"DCWPLAY: DirectSoundCreate hr=%08x ds=%08x\r\n", (unsigned)hr, (unsigned)(ULONG)g_ds);
-	if (hr != DS_OK || !g_ds)
+	hr = DirectSoundCreate(NULL, &g_pDs, NULL);
+	Logf(L"DCWPLAY: DirectSoundCreate hr=%08x ds=%08x\r\n", (unsigned)hr, (unsigned)(ULONG)g_pDs);
+	if (hr != DS_OK || !g_pDs)
 		return 0;
-	hr = g_ds->lpVtbl->SetCooperativeLevel(g_ds, g_hwndHidden, DSSCL_NORMAL);
+	hr = g_pDs->lpVtbl->SetCooperativeLevel(g_pDs, g_hwndHidden, DSSCL_NORMAL);
 	Logf(L"DCWPLAY: SetCooperativeLevel hr=%08x\r\n", (unsigned)hr);
 	return 1;
 }
 
 static void DsClose(void)
 {
-	if (g_buf)
+	if (g_pBuf)
 	{
-		g_buf->lpVtbl->Stop(g_buf);
-		g_buf->lpVtbl->Release(g_buf);
-		g_buf = NULL;
+		g_pBuf->lpVtbl->Stop(g_pBuf);
+		g_pBuf->lpVtbl->Release(g_pBuf);
+		g_pBuf = NULL;
 	}
 }
 
@@ -359,221 +359,225 @@ static int DsOpenBuffer(void)
 	memset(&wf, 0, sizeof(wf));
 	wf.wFormatTag = WAVE_FORMAT_PCM;
 	wf.nChannels = 2;
-	wf.nSamplesPerSec = g_rate;
+	wf.nSamplesPerSec = g_nRate;
 	wf.wBitsPerSample = 16;
 	wf.nBlockAlign = 4;
-	wf.nAvgBytesPerSec = g_rate * 4;
+	wf.nAvgBytesPerSec = g_nRate * 4;
 	// The DC AICA requires the buffer size AND every Lock offset/size to be 32-byte aligned
 	// (else Play/Lock return DSERR_NOT32BYTEALIGNED = 0x887800ff). Round the 1-second ring down.
-	g_bufBytes = (DWORD)(g_rate * 4) & ~31u; // ~1 second ring, 32-byte aligned
+	g_dwBufBytes = (DWORD)(g_nRate * 4) & ~31u; // ~1 second ring, 32-byte aligned
 	memset(&d, 0, sizeof(d));
 	d.dwSize = sizeof(d);
 	// DSBCAPS_STATIC is REQUIRED on the DC: the AICA has no software mixer, so a playable buffer
 	// must live in AICA sound RAM (STATIC). The ~1-second ring (176 KB) fits AICA RAM and we
 	// still stream into it (Lock/refill behind the cursor).
 	d.dwFlags = DSBCAPS_STATIC | DSBCAPS_CTRLVOLUME | DSBCAPS_GETCURRENTPOSITION2;
-	d.dwBufferBytes = g_bufBytes;
+	d.dwBufferBytes = g_dwBufBytes;
 	d.lpwfxFormat = &wf;
-	hr = g_ds->lpVtbl->CreateSoundBuffer(g_ds, &d, &g_buf, NULL);
-	Logf(L"DCWPLAY: CreateSoundBuffer hr=%08x rate=%d bytes=%u\r\n", (unsigned)hr, g_rate,
-	     g_bufBytes);
+	hr = g_pDs->lpVtbl->CreateSoundBuffer(g_pDs, &d, &g_pBuf, NULL);
+	Logf(L"DCWPLAY: CreateSoundBuffer hr=%08x rate=%d bytes=%u\r\n", (unsigned)hr, g_nRate,
+	     g_dwBufBytes);
 	if (hr != DS_OK)
 		return 0;
-	g_writePos = 0;
+	g_dwWritePos = 0;
 	return 1;
 }
 
 static void DsSetVolume(void)
 {
-	long db = (g_vol >= 100) ? 0 : (g_vol <= 0) ? -10000 : (long)((g_vol - 100) * 45);
-	if (g_buf)
-		g_buf->lpVtbl->SetVolume(g_buf, db);
+	long lDb = (g_nVol >= 100) ? 0 : (g_nVol <= 0) ? -10000 : (long)((g_nVol - 100) * 45);
+	if (g_pBuf)
+		g_pBuf->lpVtbl->SetVolume(g_pBuf, lDb);
 }
 
 // Prime the whole ring once with decoded audio so playback isn't silent for the first loop.
 static void DsPrime(void)
 {
-	void *p1, *p2;
-	DWORD b1, b2;
+	void *pv1, *pv2;
+	DWORD dwB1, dwB2;
 	HRESULT hr;
-	int got;
-	if (!g_buf)
+	int nGot;
+	if (!g_pBuf)
 		return;
-	hr = g_buf->lpVtbl->Lock(g_buf, 0, g_bufBytes, &p1, &b1, &p2, &b2, DSBLOCK_ENTIREBUFFER);
+	hr = g_pBuf->lpVtbl->Lock(g_pBuf, 0, g_dwBufBytes, &pv1, &dwB1, &pv2, &dwB2,
+	                          DSBLOCK_ENTIREBUFFER);
 	if (hr != DS_OK)
 	{
 		Logf(L"DCWPLAY: prime Lock hr=%08x\r\n", (unsigned)hr);
 		return;
 	}
-	got = Decode((short *)p1, (int)(b1 / 4));
-	if (got > 0)
-		g_played += (DWORD)got;
-	if ((DWORD)got * 4 < b1)
-		memset((BYTE *)p1 + got * 4, 0, b1 - (DWORD)got * 4);
-	if (p2 && b2)
-		memset(p2, 0, b2);
-	g_buf->lpVtbl->Unlock(g_buf, p1, b1, p2, b2);
-	g_writePos = 0;
-	Logf(L"DCWPLAY: primed %d frames\r\n", got);
+	nGot = Decode((short *)pv1, (int)(dwB1 / 4));
+	if (nGot > 0)
+		g_dwPlayed += (DWORD)nGot;
+	if ((DWORD)nGot * 4 < dwB1)
+		memset((BYTE *)pv1 + nGot * 4, 0, dwB1 - (DWORD)nGot * 4);
+	if (pv2 && dwB2)
+		memset(pv2, 0, dwB2);
+	g_pBuf->lpVtbl->Unlock(g_pBuf, pv1, dwB1, pv2, dwB2);
+	g_dwWritePos = 0;
+	Logf(L"DCWPLAY: primed %d frames\r\n", nGot);
 }
 
 // Fill the part of the ring the card has already played with freshly decoded audio.
 static void DsPump(void)
 {
-	DWORD play, write, freeb;
+	DWORD dwPlay, dwWrite, dwFree;
 	HRESULT hr;
-	void *p1, *p2;
-	DWORD b1, b2;
-	static int s_logged;
-	if (!g_buf)
+	void *pv1, *pv2;
+	DWORD dwB1, dwB2;
+	static int s_nLogged;
+	if (!g_pBuf)
 		return;
-	hr = g_buf->lpVtbl->GetCurrentPosition(g_buf, &play, &write);
+	hr = g_pBuf->lpVtbl->GetCurrentPosition(g_pBuf, &dwPlay, &dwWrite);
 	if (hr != DS_OK)
 	{
-		if (s_logged < 3)
+		if (s_nLogged < 3)
 		{
 			Logf(L"DCWPLAY: GetCurrentPosition hr=%08x\r\n", (unsigned)hr);
-			s_logged++;
+			s_nLogged++;
 		}
 		return;
 	}
-	freeb = (play >= g_writePos) ? (play - g_writePos) : (g_bufBytes - g_writePos + play);
-	if (s_logged < 6)
+	dwFree =
+	    (dwPlay >= g_dwWritePos) ? (dwPlay - g_dwWritePos) : (g_dwBufBytes - g_dwWritePos + dwPlay);
+	if (s_nLogged < 6)
 	{
-		Logf(L"DCWPLAY: pump play=%u write=%u wp=%u freeb=%u\r\n", play, write, g_writePos, freeb);
-		s_logged++;
+		Logf(L"DCWPLAY: pump play=%u write=%u wp=%u freeb=%u\r\n", dwPlay, dwWrite, g_dwWritePos,
+		     dwFree);
+		s_nLogged++;
 	}
-	if (freeb < 64)
+	if (dwFree < 64)
 		return;
-	freeb &= ~31u; // 32-byte align (AICA: DSERR_NOT32BYTEALIGNED)
-	if (g_buf->lpVtbl->Lock(g_buf, g_writePos, freeb, &p1, &b1, &p2, &b2, 0) != DS_OK)
+	dwFree &= ~31u; // 32-byte align (AICA: DSERR_NOT32BYTEALIGNED)
+	if (g_pBuf->lpVtbl->Lock(g_pBuf, g_dwWritePos, dwFree, &pv1, &dwB1, &pv2, &dwB2, 0) != DS_OK)
 		return;
 	{
-		short *seg;
-		DWORD segb, done;
-		int part;
-		for (part = 0; part < 2; part++)
+		short *psSeg;
+		DWORD dwSegB, dwDone;
+		int nPart;
+		for (nPart = 0; nPart < 2; nPart++)
 		{
-			seg = (short *)(part ? p2 : p1);
-			segb = part ? b2 : b1;
-			if (!seg || !segb)
+			psSeg = (short *)(nPart ? pv2 : pv1);
+			dwSegB = nPart ? dwB2 : dwB1;
+			if (!psSeg || !dwSegB)
 				continue;
-			done = 0;
-			while (done < segb)
+			dwDone = 0;
+			while (dwDone < dwSegB)
 			{
-				int want = (int)((segb - done) / 4), got;
-				if (!g_playing)
-					got = 0;
+				int nWant = (int)((dwSegB - dwDone) / 4), nGot;
+				if (!g_nPlaying)
+					nGot = 0;
 				else
-					got = Decode(seg + done / 2, want);
-				if (got <= 0)
+					nGot = Decode(psSeg + dwDone / 2, nWant);
+				if (nGot <= 0)
 				{
-					memset((BYTE *)seg + done, 0, segb - done);
-					if (g_playing && !g_eof)
+					memset((BYTE *)psSeg + dwDone, 0, dwSegB - dwDone);
+					if (g_nPlaying && !g_nEof)
 					{
-						g_eof = 1;
+						g_nEof = 1;
 						LOG(L"EOF");
 					}
 					break;
 				}
-				g_played += (DWORD)got;
-				done += (DWORD)got * 4;
+				g_dwPlayed += (DWORD)nGot;
+				dwDone += (DWORD)nGot * 4;
 			}
 		}
 	}
-	g_buf->lpVtbl->Unlock(g_buf, p1, b1, p2, b2);
-	g_writePos = (g_writePos + freeb) % g_bufBytes;
+	g_pBuf->lpVtbl->Unlock(g_pBuf, pv1, dwB1, pv2, dwB2);
+	g_dwWritePos = (g_dwWritePos + dwFree) % g_dwBufBytes;
 }
 
 // ---- file load ----------------------------------------------------------------------
-static DWORD rd32(const BYTE *p)
+static DWORD rd32(const BYTE *pb)
 {
-	return p[0] | (p[1] << 8) | (p[2] << 16) | ((DWORD)p[3] << 24);
+	return pb[0] | (pb[1] << 8) | (pb[2] << 16) | ((DWORD)pb[3] << 24);
 }
 
-static int LoadFile(const WCHAR *path)
+static int LoadFile(const WCHAR *pszPath)
 {
-	BYTE hdr[512];
-	DWORD got = 0;
-	const WCHAR *base;
-	if (g_file != INVALID_HANDLE_VALUE)
+	BYTE abHdr[512];
+	DWORD dwGot = 0;
+	const WCHAR *pszBase;
+	if (g_hFile != INVALID_HANDLE_VALUE)
 	{
-		CloseHandle(g_file);
-		g_file = INVALID_HANDLE_VALUE;
+		CloseHandle(g_hFile);
+		g_hFile = INVALID_HANDLE_VALUE;
 	}
-	g_file = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
-	if (g_file == INVALID_HANDLE_VALUE)
+	g_hFile = CreateFileW(pszPath, GENERIC_READ, FILE_SHARE_READ, 0, OPEN_EXISTING, 0, 0);
+	if (g_hFile == INVALID_HANDLE_VALUE)
 	{
 		Logf(L"DCWPLAY: open FAILED err=%u\r\n", GetLastError());
 		return 0;
 	}
-	g_size = GetFileSize(g_file, 0);
-	ReadFile(g_file, hdr, sizeof(hdr), &got, 0); // peek the header (then we re-seek)
-	Logf(L"DCWPLAY: opened size=%u hdr=%u\r\n", g_size, got);
+	g_dwSize = GetFileSize(g_hFile, 0);
+	ReadFile(g_hFile, abHdr, sizeof(abHdr), &dwGot, 0); // peek the header (then we re-seek)
+	Logf(L"DCWPLAY: opened size=%u hdr=%u\r\n", g_dwSize, dwGot);
 
-	base = path;
+	pszBase = pszPath;
 	{
-		const WCHAR *q;
-		for (q = path; *q; q++)
-			if (*q == L'\\' || *q == L'/')
-				base = q + 1;
+		const WCHAR *pszQ;
+		for (pszQ = pszPath; *pszQ; pszQ++)
+			if (*pszQ == L'\\' || *pszQ == L'/')
+				pszBase = pszQ + 1;
 	}
 	{
 		int i;
-		for (i = 0; i < 79 && base[i]; i++)
-			g_track[i] = base[i];
-		g_track[i] = 0;
+		for (i = 0; i < 79 && pszBase[i]; i++)
+			g_aszTrack[i] = pszBase[i];
+		g_aszTrack[i] = 0;
 	}
 
-	if (got > 12 && hdr[0] == 'R' && hdr[1] == 'I' && hdr[2] == 'F' && hdr[3] == 'F')
+	if (dwGot > 12 && abHdr[0] == 'R' && abHdr[1] == 'I' && abHdr[2] == 'F' && abHdr[3] == 'F')
 	{ // WAV
-		DWORD o = 12;
-		int wavRate = OUT_RATE, bps;
-		DWORD srcFrames, secs;
-		g_isMp3 = 0;
-		g_wavOff = 0;
-		g_wavEnd = 0;
-		while (o + 8 <= got)
+		DWORD dwO = 12;
+		int nWavRate = OUT_RATE, nBps;
+		DWORD dwSrcFrames, dwSecs;
+		g_nIsMp3 = 0;
+		g_dwWavOff = 0;
+		g_dwWavEnd = 0;
+		while (dwO + 8 <= dwGot)
 		{
-			DWORD csz = rd32(hdr + o + 4);
-			if (!memcmp(hdr + o, "fmt ", 4))
+			DWORD dwCsz = rd32(abHdr + dwO + 4);
+			if (!memcmp(abHdr + dwO, "fmt ", 4))
 			{
-				g_wavCh = hdr[o + 10] | (hdr[o + 11] << 8);
-				wavRate = (int)rd32(hdr + o + 12);
-				g_wavBits = hdr[o + 22] | (hdr[o + 23] << 8);
+				g_nWavCh = abHdr[dwO + 10] | (abHdr[dwO + 11] << 8);
+				nWavRate = (int)rd32(abHdr + dwO + 12);
+				g_nWavBits = abHdr[dwO + 22] | (abHdr[dwO + 23] << 8);
 			}
-			else if (!memcmp(hdr + o, "data", 4))
+			else if (!memcmp(abHdr + dwO, "data", 4))
 			{
-				g_wavOff = o + 8;
-				g_wavEnd = o + 8 + csz;
-				if (g_wavEnd > g_size)
-					g_wavEnd = g_size;
+				g_dwWavOff = dwO + 8;
+				g_dwWavEnd = dwO + 8 + dwCsz;
+				if (g_dwWavEnd > g_dwSize)
+					g_dwWavEnd = g_dwSize;
 				break;
 			}
-			o += 8 + ((csz + 1) & ~1u);
+			dwO += 8 + ((dwCsz + 1) & ~1u);
 		}
-		if (!g_wavOff)
+		if (!g_dwWavOff)
 		{
 			LOG(L"WAV: no data chunk in first 512B");
 			return 0;
 		}
-		SetSrcRate(wavRate); // output stays at OUT_RATE; resample the source
-		bps = (g_wavBits / 8) * (g_wavCh ? g_wavCh : 1);
-		srcFrames = (g_wavEnd - g_wavOff) / (DWORD)bps; // length in OUTPUT frames (resampled)
-		secs = wavRate ? srcFrames / (DWORD)wavRate : 0;
-		g_totalFrames = secs * (DWORD)OUT_RATE;
-		Logf(L"DCWPLAY: WAV src=%dHz ch=%d bits=%d -> out %dHz data=%u..%u\r\n", wavRate, g_wavCh,
-		     g_wavBits, OUT_RATE, g_wavOff, g_wavEnd);
+		SetSrcRate(nWavRate); // output stays at OUT_RATE; resample the source
+		nBps = (g_nWavBits / 8) * (g_nWavCh ? g_nWavCh : 1);
+		dwSrcFrames =
+		    (g_dwWavEnd - g_dwWavOff) / (DWORD)nBps; // length in OUTPUT frames (resampled)
+		dwSecs = nWavRate ? dwSrcFrames / (DWORD)nWavRate : 0;
+		g_dwTotalFrames = dwSecs * (DWORD)OUT_RATE;
+		Logf(L"DCWPLAY: WAV src=%dHz ch=%d bits=%d -> out %dHz data=%u..%u\r\n", nWavRate, g_nWavCh,
+		     g_nWavBits, OUT_RATE, g_dwWavOff, g_dwWavEnd);
 	}
 	else
 	{ // assume MP3
-		g_isMp3 = 1;
-		g_ch = 2;
-		g_totalFrames = 0;
+		g_nIsMp3 = 1;
+		g_nCh = 2;
+		g_dwTotalFrames = 0;
 		SetSrcRate(OUT_RATE);
 	}
 	DecoderReset();
-	if (g_isMp3)
+	if (g_nIsMp3)
 	{
 		ProbeMp3Rate();
 		DecoderReset();
@@ -588,65 +592,65 @@ static int LoadFile(const WCHAR *path)
 // ---- transport ----------------------------------------------------------------------
 static void Play(void)
 {
-	if (g_file == INVALID_HANDLE_VALUE)
+	if (g_hFile == INVALID_HANDLE_VALUE)
 		return;
-	if (!g_playing)
+	if (!g_nPlaying)
 	{
-		g_playing = 1;
-		if (g_buf)
+		g_nPlaying = 1;
+		if (g_pBuf)
 		{
-			HRESULT hr = g_buf->lpVtbl->Play(g_buf, 0, 0, DSBPLAY_LOOPING);
+			HRESULT hr = g_pBuf->lpVtbl->Play(g_pBuf, 0, 0, DSBPLAY_LOOPING);
 			Logf(L"DCWPLAY: Play hr=%08x\r\n", (unsigned)hr);
 		}
 	}
 }
 static void Pause(void)
 {
-	g_playing = 0;
+	g_nPlaying = 0;
 	LOG(L"Pause");
 }
 static void Stop(void)
 {
-	g_playing = 0;
+	g_nPlaying = 0;
 	LOG(L"Stop");
-	if (g_buf)
-		g_buf->lpVtbl->Stop(g_buf);
+	if (g_pBuf)
+		g_pBuf->lpVtbl->Stop(g_pBuf);
 	DecoderReset();
-	g_writePos = 0;
-	if (g_buf)
-		g_buf->lpVtbl->SetCurrentPosition(g_buf, 0);
+	g_dwWritePos = 0;
+	if (g_pBuf)
+		g_pBuf->lpVtbl->SetCurrentPosition(g_pBuf, 0);
 }
 
-static void SeekFrac(float frac)
+static void SeekFrac(float fFrac)
 {
-	if (g_file == INVALID_HANDLE_VALUE)
+	if (g_hFile == INVALID_HANDLE_VALUE)
 		return;
-	if (frac < 0)
-		frac = 0;
-	if (frac > 1)
-		frac = 1;
-	if (g_isMp3)
+	if (fFrac < 0)
+		fFrac = 0;
+	if (fFrac > 1)
+		fFrac = 1;
+	if (g_nIsMp3)
 	{
-		g_streamPos = (DWORD)(frac * g_size) & ~1u; // approx (CBR-ish)
-		SetFilePointer(g_file, (LONG)g_streamPos, 0, FILE_BEGIN);
+		g_dwStreamPos = (DWORD)(fFrac * g_dwSize) & ~1u; // approx (CBR-ish)
+		SetFilePointer(g_hFile, (LONG)g_dwStreamPos, 0, FILE_BEGIN);
 		mp3dec_init(&g_mp3);
-		g_sN = g_sP = 0;
+		g_nSN = g_nSP = 0;
 	}
 	else
 	{
-		DWORD bps = (g_wavBits / 8) * (g_wavCh ? g_wavCh : 1);
-		g_streamPos = g_wavOff + (DWORD)(frac * (g_wavEnd - g_wavOff)) / bps * bps;
-		SetFilePointer(g_file, (LONG)g_streamPos, 0, FILE_BEGIN);
-		g_sN = g_sP = 0;
+		DWORD dwBps = (g_nWavBits / 8) * (g_nWavCh ? g_nWavCh : 1);
+		g_dwStreamPos = g_dwWavOff + (DWORD)(fFrac * (g_dwWavEnd - g_dwWavOff)) / dwBps * dwBps;
+		SetFilePointer(g_hFile, (LONG)g_dwStreamPos, 0, FILE_BEGIN);
+		g_nSN = g_nSP = 0;
 	}
-	g_played = (DWORD)(frac * (g_totalFrames ? g_totalFrames : 1));
-	g_eof = 0;
+	g_dwPlayed = (DWORD)(fFrac * (g_dwTotalFrames ? g_dwTotalFrames : 1));
+	g_nEof = 0;
 }
 
 // ---- UI -----------------------------------------------------------------------------
 #define FFTN 128
 static float COST[FFTN], SINT[FFTN];
-static int g_twInit;
+static int g_nTwInit;
 static float cosa(float x)
 {
 	float x2;
@@ -657,32 +661,32 @@ static float cosa(float x)
 	x2 = x * x;
 	return 1.f - x2 * (0.5f - x2 * (1.f / 24 - x2 * (1.f / 720 - x2 * (1.f / 40320))));
 }
-static void Bars(int *bars, int nbars)
+static void Bars(int *pnBars, int nBars)
 {
 	static float re[FFTN], im[FFTN];
-	int i, j, k, b, w = g_vizW;
-	if (!g_twInit)
+	int i, j, k, b, nW = g_nVizW;
+	if (!g_nTwInit)
 	{
 		for (i = 0; i < FFTN; i++)
 		{
 			COST[i] = cosa(6.28318531f * i / FFTN);
 			SINT[i] = cosa(6.28318531f * i / FFTN - 1.57079633f);
 		}
-		g_twInit = 1;
+		g_nTwInit = 1;
 	}
 	for (i = 0; i < FFTN; i++)
 	{
-		short s = g_viz[(w - FFTN + i) & (VIZN - 1)];
-		float win = 0.5f - 0.5f * COST[i]; // Hann
-		re[i] = (float)s * win * (1.f / 32768);
+		short s = g_asViz[(nW - FFTN + i) & (VIZN - 1)];
+		float fWin = 0.5f - 0.5f * COST[i]; // Hann
+		re[i] = (float)s * fWin * (1.f / 32768);
 		im[i] = 0;
 	}
 	for (i = 1, j = 0; i < FFTN; i++)
 	{
-		int bit = FFTN >> 1;
-		for (; j & bit; bit >>= 1)
-			j ^= bit;
-		j ^= bit;
+		int nBit = FFTN >> 1;
+		for (; j & nBit; nBit >>= 1)
+			j ^= nBit;
+		j ^= nBit;
 		if (i < j)
 		{
 			float t = re[i];
@@ -695,12 +699,12 @@ static void Bars(int *bars, int nbars)
 	}
 	for (k = 1; k < FFTN; k <<= 1)
 	{
-		int step = FFTN / (k << 1);
+		int nStep = FFTN / (k << 1);
 		for (j = 0; j < FFTN; j += k << 1)
 			for (i = 0; i < k; i++)
 			{
-				int idx = (i * step) & (FFTN - 1);
-				float cr = COST[idx], ci = -SINT[idx];
+				int nIdx = (i * nStep) & (FFTN - 1);
+				float cr = COST[nIdx], ci = -SINT[nIdx];
 				float ar = re[j + i + k], ai = im[j + i + k];
 				float ur = ar * cr - ai * ci, ui = ar * ci + ai * cr;
 				re[j + i + k] = re[j + i] - ur;
@@ -709,52 +713,52 @@ static void Bars(int *bars, int nbars)
 				im[j + i] += ui;
 			}
 	}
-	for (b = 0; b < nbars; b++)
+	for (b = 0; b < nBars; b++)
 	{
-		int lo = 1 + b * (FFTN / 2 - 1) / nbars, hi = 1 + (b + 1) * (FFTN / 2 - 1) / nbars;
-		float mag = 0;
-		for (i = lo; i < hi; i++)
+		int nLo = 1 + b * (FFTN / 2 - 1) / nBars, nHi = 1 + (b + 1) * (FFTN / 2 - 1) / nBars;
+		float fMag = 0;
+		for (i = nLo; i < nHi; i++)
 		{
 			float m = (re[i] < 0 ? -re[i] : re[i]) + (im[i] < 0 ? -im[i] : im[i]);
-			if (m > mag)
-				mag = m;
+			if (m > fMag)
+				fMag = m;
 		}
 		{
-			int v = (int)(mag * 300.f);
+			int v = (int)(fMag * 300.f);
 			if (v > 100)
 				v = 100;
-			bars[b] = v;
+			pnBars[b] = v;
 		}
 	}
 }
 
-static void FmtTime(WCHAR *out, DWORD frames)
+static void FmtTime(WCHAR *pszOut, DWORD dwFrames)
 {
-	DWORD s = g_rate ? frames / g_rate : 0;
-	wsprintfW(out, L"%u:%02u", s / 60, s % 60);
+	DWORD dwS = g_nRate ? dwFrames / g_nRate : 0;
+	wsprintfW(pszOut, L"%u:%02u", dwS / 60, dwS % 60);
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 {
-	DCWin *win;
-	DWORD key, last = 0;
-	int pbtnWas = 0;
-	static int bars[14], peak[14];
+	DCWin *pWin;
+	DWORD dwKey, dwLast = 0;
+	int nPbtnWas = 0;
+	static int anBars[14], anPeak[14];
 
 	LOG(L"WinMain enter");
-	win = DCWinOpen(70, 70, PW, PH, L"Media Player", ICON_APP);
-	if (!win)
+	pWin = DCWinOpen(70, 70, PW, PH, L"Media Player", ICON_APP);
+	if (!pWin)
 		return 1;
 	if (DsInit() && lpCmd && lpCmd[0])
 	{
-		WCHAR p[260];
+		WCHAR aszP[260];
 		int i, j = 0; // strip surrounding quotes Explorer may add
 		for (i = 0; lpCmd[i] && j < 259; i++)
 			if (lpCmd[i] != L'"')
-				p[j++] = lpCmd[i];
-		p[j] = 0;
-		Logf(L"DCWPLAY: cmdline '%s'\r\n", p);
-		if (LoadFile(p))
+				aszP[j++] = lpCmd[i];
+		aszP[j] = 0;
+		Logf(L"DCWPLAY: cmdline '%s'\r\n", aszP);
+		if (LoadFile(aszP))
 			Play();
 	}
 	else
@@ -762,51 +766,51 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 
 	for (;;)
 	{
-		int cw = PW, ch = PH, px, py, pbtn = 0, over, changed = 0;
-		int i, x, y, bw;
+		int nCw = PW, nCh = PH, nPx, nPy, nPbtn = 0, nOver, nChanged = 0;
+		int i, x, y, nBw;
 
 		DsPump();
-		DCWinClientSize(win, &cw, &ch);
-		over = DCWinGetPointer(win, &px, &py, &pbtn);
+		DCWinClientSize(pWin, &nCw, &nCh);
+		nOver = DCWinGetPointer(pWin, &nPx, &nPy, &nPbtn);
 
-		while (DCWinPollKey(win, &key))
+		while (DCWinPollKey(pWin, &dwKey))
 		{
-			changed = 1;
-			if (key == L' ')
+			nChanged = 1;
+			if (dwKey == L' ')
 			{
-				if (g_playing)
+				if (g_nPlaying)
 					Pause();
 				else
 					Play();
 			}
-			else if (key == 'S')
+			else if (dwKey == 'S')
 				Stop();
-			else if (key == VK_LEFT)
-				SeekFrac((float)g_played / (g_totalFrames ? g_totalFrames : 1) - 0.05f);
-			else if (key == VK_RIGHT)
-				SeekFrac((float)g_played / (g_totalFrames ? g_totalFrames : 1) + 0.05f);
-			else if (key == VK_UP)
+			else if (dwKey == VK_LEFT)
+				SeekFrac((float)g_dwPlayed / (g_dwTotalFrames ? g_dwTotalFrames : 1) - 0.05f);
+			else if (dwKey == VK_RIGHT)
+				SeekFrac((float)g_dwPlayed / (g_dwTotalFrames ? g_dwTotalFrames : 1) + 0.05f);
+			else if (dwKey == VK_UP)
 			{
-				if (g_vol < 100)
-					g_vol += 5;
+				if (g_nVol < 100)
+					g_nVol += 5;
 				DsSetVolume();
 			}
-			else if (key == VK_DOWN)
+			else if (dwKey == VK_DOWN)
 			{
-				if (g_vol > 0)
-					g_vol -= 5;
+				if (g_nVol > 0)
+					g_nVol -= 5;
 				DsSetVolume();
 			}
 		}
 
 		// clickable controls: transport row buttons, seek bar, volume bar
-		bw = (cw - 16) / 5;
-		if (over && pbtn && !pbtnWas) // click edge
+		nBw = (nCw - 16) / 5;
+		if (nOver && nPbtn && !nPbtnWas) // click edge
 		{
-			int ty = ch - 26;
-			if (py >= ty && py < ty + 18) // transport buttons row
+			int nTy = nCh - 26;
+			if (nPy >= nTy && nPy < nTy + 18) // transport buttons row
 			{
-				int b = (px - 8) / bw;
+				int b = (nPx - 8) / nBw;
 				if (b == 0)
 					SeekFrac(0);
 				else if (b == 1)
@@ -818,97 +822,99 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPWSTR lpCmd, int nShow)
 				else if (b == 4)
 					SeekFrac(1);
 			}
-			else if (py >= 70 && py < 80) // seek bar
-				SeekFrac((float)(px - 8) / (cw - 16));
-			changed = 1;
+			else if (nPy >= 70 && nPy < 80) // seek bar
+				SeekFrac((float)(nPx - 8) / (nCw - 16));
+			nChanged = 1;
 		}
-		if (over && pbtn && py >= ch - 46 && py < ch - 36 && px > cw / 2) // volume bar (right half)
+		if (nOver && nPbtn && nPy >= nCh - 46 && nPy < nCh - 36 &&
+		    nPx > nCw / 2) // volume bar (right half)
 		{
-			int v = (px - cw / 2 - 4) * 100 / (cw / 2 - 30);
+			int v = (nPx - nCw / 2 - 4) * 100 / (nCw / 2 - 30);
 			if (v < 0)
 				v = 0;
 			if (v > 100)
 				v = 100;
-			g_vol = v;
+			g_nVol = v;
 			DsSetVolume();
-			changed = 1;
+			nChanged = 1;
 		}
-		pbtnWas = over ? pbtn : 0;
+		nPbtnWas = nOver ? nPbtn : 0;
 
-		if (GetTickCount() - last > 33)
+		if (GetTickCount() - dwLast > 33)
 		{
-			last = GetTickCount();
-			changed = 1;
+			dwLast = GetTickCount();
+			nChanged = 1;
 		} // ~30fps for the viz
-		if (DCWinResized(win))
-			changed = 1;
+		if (DCWinResized(pWin))
+			nChanged = 1;
 
-		if (changed)
+		if (nChanged)
 		{
-			WCHAR t[40], tt[16], td[16];
-			DCWinBeginFrame(win);
-			DCWinFillBg(win, C_BG);
-			DCWinFill(win, 6, 6, cw - 90, 26, C_PANEL);
-			DCWinText(win, 10, 9, C_LCD, C_PANEL, g_track);
-			DCWinText(win, 10, 20, C_LCDDIM, C_PANEL, g_isMp3 ? L"MP3" : L"WAV");
-			DCWinFill(win, cw - 80, 6, 74, 26, C_PANEL);
-			FmtTime(tt, g_played);
-			FmtTime(td, g_totalFrames);
-			DCWinText(win, cw - 74, 9, C_LCDHI, C_PANEL, tt);
-			wsprintfW(t, L"/ %s  %s", td, g_playing ? L"|>" : L"||");
-			DCWinText(win, cw - 74, 20, C_LCDDIM, C_PANEL, t);
-			DCWinFill(win, 6, 36, cw - 12, 28, C_PANEL);
-			Bars(bars, 14);
-			bw = (cw - 16) / 14;
+			WCHAR aszT[40], aszTt[16], aszTd[16];
+			DCWinBeginFrame(pWin);
+			DCWinFillBg(pWin, C_BG);
+			DCWinFill(pWin, 6, 6, nCw - 90, 26, C_PANEL);
+			DCWinText(pWin, 10, 9, C_LCD, C_PANEL, g_aszTrack);
+			DCWinText(pWin, 10, 20, C_LCDDIM, C_PANEL, g_nIsMp3 ? L"MP3" : L"WAV");
+			DCWinFill(pWin, nCw - 80, 6, 74, 26, C_PANEL);
+			FmtTime(aszTt, g_dwPlayed);
+			FmtTime(aszTd, g_dwTotalFrames);
+			DCWinText(pWin, nCw - 74, 9, C_LCDHI, C_PANEL, aszTt);
+			wsprintfW(aszT, L"/ %s  %s", aszTd, g_nPlaying ? L"|>" : L"||");
+			DCWinText(pWin, nCw - 74, 20, C_LCDDIM, C_PANEL, aszT);
+			DCWinFill(pWin, 6, 36, nCw - 12, 28, C_PANEL);
+			Bars(anBars, 14);
+			nBw = (nCw - 16) / 14;
 			for (i = 0; i < 14; i++)
 			{
-				int h = bars[i] * 24 / 100;
+				int h = anBars[i] * 24 / 100;
 				if (h < 1)
 					h = 1;
-				if (bars[i] > peak[i])
-					peak[i] = bars[i];
-				else if (peak[i] > 0)
-					peak[i]--;
-				x = 8 + i * bw;
-				DCWinFill(win, x, 60 - h, bw - 2, h, (h > 18) ? C_LCDHI : C_LCD);
-				DCWinFill(win, x, 60 - peak[i] * 24 / 100 - 1, bw - 2, 1, C_LCDHI);
+				if (anBars[i] > anPeak[i])
+					anPeak[i] = anBars[i];
+				else if (anPeak[i] > 0)
+					anPeak[i]--;
+				x = 8 + i * nBw;
+				DCWinFill(pWin, x, 60 - h, nBw - 2, h, (h > 18) ? C_LCDHI : C_LCD);
+				DCWinFill(pWin, x, 60 - anPeak[i] * 24 / 100 - 1, nBw - 2, 1, C_LCDHI);
 			}
-			DCWinFill(win, 8, 70, cw - 16, 10, C_PANEL);
+			DCWinFill(pWin, 8, 70, nCw - 16, 10, C_PANEL);
 			{
-				int sw =
-				    (g_isMp3 ? (int)((float)g_streamPos / (g_size ? g_size : 1) * (cw - 18))
-				             : (g_totalFrames ? (int)((float)g_played / g_totalFrames * (cw - 18))
-				                              : 0));
-				DCWinFill(win, 9, 71, sw, 8, C_LCD);
+				int nSw =
+				    (g_nIsMp3 ? (int)((float)g_dwStreamPos / (g_dwSize ? g_dwSize : 1) * (nCw - 18))
+				              : (g_dwTotalFrames
+				                     ? (int)((float)g_dwPlayed / g_dwTotalFrames * (nCw - 18))
+				                     : 0));
+				DCWinFill(pWin, 9, 71, nSw, 8, C_LCD);
 			}
-			y = ch - 26;
-			bw = (cw - 16) / 5;
+			y = nCh - 26;
+			nBw = (nCw - 16) / 5;
 			{
-				const WCHAR *lbl[5] = {L"|<", L">", L"||", L"[]", L">|"};
+				const WCHAR *apszLbl[5] = {L"|<", L">", L"||", L"[]", L">|"};
 				for (i = 0; i < 5; i++)
 				{
-					x = 8 + i * bw;
-					DCWinFill(win, x, y, bw - 3, 18, C_BTN);
-					DCWinText(win, x + bw / 2 - 6, y + 4, C_LCD, C_BTN, lbl[i]);
+					x = 8 + i * nBw;
+					DCWinFill(pWin, x, y, nBw - 3, 18, C_BTN);
+					DCWinText(pWin, x + nBw / 2 - 6, y + 4, C_LCD, C_BTN, apszLbl[i]);
 				}
 			}
-			DCWinText(win, cw / 2 - 24, ch - 44, C_LCDDIM, C_BG, L"VOL");
-			DCWinFill(win, cw / 2, ch - 46, cw / 2 - 26, 10, C_PANEL);
-			DCWinFill(win, cw / 2 + 1, ch - 45, (cw / 2 - 28) * g_vol / 100, 8, C_LCD);
-			DCWinText(win, cw - 24, ch - 44, C_LCDDIM, C_BG, L"O");
-			DCWinEndFrame(win);
+			DCWinText(pWin, nCw / 2 - 24, nCh - 44, C_LCDDIM, C_BG, L"VOL");
+			DCWinFill(pWin, nCw / 2, nCh - 46, nCw / 2 - 26, 10, C_PANEL);
+			DCWinFill(pWin, nCw / 2 + 1, nCh - 45, (nCw / 2 - 28) * g_nVol / 100, 8, C_LCD);
+			DCWinText(pWin, nCw - 24, nCh - 44, C_LCDDIM, C_BG, L"O");
+			DCWinEndFrame(pWin);
 		}
-		if (DCWinShouldClose(win))
+		if (DCWinShouldClose(pWin))
 			break;
 		Sleep(10);
 	}
 
 	Stop();
 	DsClose();
-	if (g_ds)
-		g_ds->lpVtbl->Release(g_ds);
-	if (g_file != INVALID_HANDLE_VALUE)
-		CloseHandle(g_file);
-	DCWinClose(win);
+	if (g_pDs)
+		g_pDs->lpVtbl->Release(g_pDs);
+	if (g_hFile != INVALID_HANDLE_VALUE)
+		CloseHandle(g_hFile);
+	DCWinClose(pWin);
 	return 0;
 }
