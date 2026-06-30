@@ -1,0 +1,19 @@
+# Microsoft / WinCE-SDK house style for wince-dc (our C/C++ only; vendor/ is excluded).
+BasedOnStyle: Microsoft
+Language: Cpp
+UseTab: ForIndentation        # tabs to indent, spaces to align (classic MS style)
+TabWidth: 4
+IndentWidth: 4
+ColumnLimit: 100
+BreakBeforeBraces: Allman
+AllowShortFunctionsOnASingleLine: None     # expand the "cursed" one-liner functions
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AlignTrailingComments: true
+AlignConsecutiveMacros: AcrossEmptyLines
+PointerAlignment: Right
+SpaceBeforeParens: ControlStatements
+SortIncludes: false           # CE include order is significant; keep it
+IndentCaseLabels: true

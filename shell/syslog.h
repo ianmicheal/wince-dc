@@ -9,20 +9,20 @@
 
 #include <windows.h>
 
-#define SYSLOG_SECTION  L"DCSYSLOG"
-#define SYSLOG_MAGIC    0x44434C47u     // 'DCLG'
-#define SYSLOG_LINES    256             // ring capacity (power-of-two-ish; wraps)
-#define SYSLOG_LINELEN  80
+#define SYSLOG_SECTION L"DCSYSLOG"
+#define SYSLOG_MAGIC   0x44434C47u // 'DCLG'
+#define SYSLOG_LINES   256         // ring capacity (power-of-two-ish; wraps)
+#define SYSLOG_LINELEN 80
 
 typedef struct
 {
-    DWORD        magic;
-    volatile LONG head;                 // total lines ever written (monotonic); line = head-1 newest
-    WCHAR        line[SYSLOG_LINES][SYSLOG_LINELEN];
+	DWORD magic;
+	volatile LONG head; // total lines ever written (monotonic); line = head-1 newest
+	WCHAR line[SYSLOG_LINES][SYSLOG_LINELEN];
 } SysLogShared;
 
-void          SysLogW(const WCHAR *s);          // append one line
-void          SysLog(const WCHAR *fmt, ...);    // printf-style (wsprintf formatting)
-SysLogShared *SysLogMap(int create);            // map the section (viewer passes create=0)
+void SysLogW(const WCHAR *s);        // append one line
+void SysLog(const WCHAR *fmt, ...);  // printf-style (wsprintf formatting)
+SysLogShared *SysLogMap(int create); // map the section (viewer passes create=0)
 
 #endif // SYSLOG_H

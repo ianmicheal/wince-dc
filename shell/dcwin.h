@@ -10,67 +10,67 @@
 
 #include <windows.h>
 
-#define DCWIN_SECTION  L"DCWIN"
-#define DCWIN_MAGIC    0x44435731   // 'DCW1'
-#define DCWIN_MAXWIN   4
-#define DCWIN_MAXCMD   192   // per-window draw-command budget (rich UIs: on-screen keyboards etc.)
-#define DCWIN_MAXIN    16
+#define DCWIN_SECTION L"DCWIN"
+#define DCWIN_MAGIC   0x44435731 // 'DCW1'
+#define DCWIN_MAXWIN  4
+#define DCWIN_MAXCMD  192 // per-window draw-command budget (rich UIs: on-screen keyboards etc.)
+#define DCWIN_MAXIN   16
 
-#define DCOP_NONE  0
-#define DCOP_FILL  1   // x,y,w,h + color
-#define DCOP_TEXT  2   // x,y + color (fg) + color2 (bg) + text
-#define DCOP_ICON  3   // x,y + color = icon id (ICON_* below)
+#define DCOP_NONE     0
+#define DCOP_FILL     1 // x,y,w,h + color
+#define DCOP_TEXT     2 // x,y + color (fg) + color2 (bg) + text
+#define DCOP_ICON     3 // x,y + color = icon id (ICON_* below)
 
 // shell icon ids (shared so clients can reference them via DCOP_ICON / DCWinIcon)
-#define ICON_COMPUTER  0
-#define ICON_DRIVE     1
-#define ICON_FOLDER    2
-#define ICON_APP       3
-#define ICON_CLOCK     4
-#define ICON_FILE      5
-#define ICON_SWIRL     6   // Dreamcast swirl (My Dreamcast)
-#define ICON_CURSOR    7   // pointer arrow
-#define ICON_COUNT     8
+#define ICON_COMPUTER 0
+#define ICON_DRIVE    1
+#define ICON_FOLDER   2
+#define ICON_APP      3
+#define ICON_CLOCK    4
+#define ICON_FILE     5
+#define ICON_SWIRL    6 // Dreamcast swirl (My Dreamcast)
+#define ICON_CURSOR   7 // pointer arrow
+#define ICON_COUNT    8
 
 typedef struct
 {
-    DWORD op;
-    LONG  x, y, w, h;
-    DWORD color;
-    DWORD color2;
-    WCHAR text[40];
+	DWORD op;
+	LONG x, y, w, h;
+	DWORD color;
+	DWORD color2;
+	WCHAR text[40];
 } DcCmd;
 
 typedef struct
 {
-    DWORD type;     // 1 = key down
-    DWORD key;      // VK code
+	DWORD type; // 1 = key down
+	DWORD key;  // VK code
 } DcInput;
 
 typedef struct
 {
-    DWORD inUse;            // 0 = free slot
-    DWORD ownerPid;
-    LONG  x, y, w, h;       // client-area position + size on the desktop
-    WCHAR title[40];
-    DWORD icon;             // ICON_* for the title bar / taskbar
-    DWORD wantClose;        // shell -> client: please close
-    DWORD gen;              // client bumps after writing a full frame of commands
-    DWORD cmdCount;
-    DcCmd cmd[DCWIN_MAXCMD];
-    DWORD inHead;           // shell writes here
-    DWORD inTail;           // client reads here
-    DcInput in[DCWIN_MAXIN];
-    LONG  ptrX, ptrY;       // shell -> client: analog-stick cursor in client coords (ptrX < 0 = not over)
-    DWORD ptrBtn;           // shell -> client: primary button (stick click / A) down = 1
+	DWORD inUse; // 0 = free slot
+	DWORD ownerPid;
+	LONG x, y, w, h; // client-area position + size on the desktop
+	WCHAR title[40];
+	DWORD icon;      // ICON_* for the title bar / taskbar
+	DWORD wantClose; // shell -> client: please close
+	DWORD gen;       // client bumps after writing a full frame of commands
+	DWORD cmdCount;
+	DcCmd cmd[DCWIN_MAXCMD];
+	DWORD inHead; // shell writes here
+	DWORD inTail; // client reads here
+	DcInput in[DCWIN_MAXIN];
+	LONG ptrX, ptrY; // shell -> client: analog-stick cursor in client coords (ptrX < 0 = not over)
+	DWORD ptrBtn;    // shell -> client: primary button (stick click / A) down = 1
 } DcWindow;
 
 typedef struct
 {
-    DWORD    magic;
-    DWORD    execSeq;          // client bumps to ask the shell to launch execPath
-    WCHAR    execPath[260];
-    DcWindow win[DCWIN_MAXWIN];
+	DWORD magic;
+	DWORD execSeq; // client bumps to ask the shell to launch execPath
+	WCHAR execPath[260];
+	DcWindow win[DCWIN_MAXWIN];
 } DcShared;
 
 #endif // DCWIN_H

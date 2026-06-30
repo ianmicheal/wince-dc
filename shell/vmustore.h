@@ -7,7 +7,7 @@
 #ifndef VMUSTORE_H
 #define VMUSTORE_H
 
-int VmuSave(const void *data, int len);             // len <= 512
-int VmuLoad(void *data, int maxlen, int *outlen);   // *outlen = bytes read (may be NULL)
+int VmuSave(const void *data, int len);           // len <= 512
+int VmuLoad(void *data, int maxlen, int *outlen); // *outlen = bytes read (may be NULL)
 
 #endif // VMUSTORE_H

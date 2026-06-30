@@ -22,30 +22,30 @@
 
 typedef struct DCWin DCWin;
 
-DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title, int iconId);  // NULL on failure
-void   DCWinBeginFrame(DCWin *win);
-void   DCWinFill(DCWin *win, int x, int y, int w, int h, COLORREF color);
-void   DCWinText(DCWin *win, int x, int y, COLORREF fg, COLORREF bg, const WCHAR *text);
-void   DCWinIcon(DCWin *win, int x, int y, int iconId);
-void   DCWinEndFrame(DCWin *win);          // publishes the frame atomically
-int    DCWinPollKey(DCWin *win, DWORD *key);   // returns 1 and a VK if one was queued
+DCWin *DCWinOpen(int x, int y, int w, int h, const WCHAR *title, int iconId); // NULL on failure
+void DCWinBeginFrame(DCWin *win);
+void DCWinFill(DCWin *win, int x, int y, int w, int h, COLORREF color);
+void DCWinText(DCWin *win, int x, int y, COLORREF fg, COLORREF bg, const WCHAR *text);
+void DCWinIcon(DCWin *win, int x, int y, int iconId);
+void DCWinEndFrame(DCWin *win);           // publishes the frame atomically
+int DCWinPollKey(DCWin *win, DWORD *key); // returns 1 and a VK if one was queued
 // Live analog-stick cursor over this window's client area. Returns 1 with client-relative x/y
 // and btn (1 = primary button down) when the cursor is over this window; 0 when it isn't. Apps
 // edge-detect btn themselves for clicks and hit-test their own controls.
-int    DCWinGetPointer(DCWin *win, int *x, int *y, int *btn);
-int    DCWinShouldClose(DCWin *win);       // shell asked us to close
+int DCWinGetPointer(DCWin *win, int *x, int *y, int *btn);
+int DCWinShouldClose(DCWin *win); // shell asked us to close
 // Current CLIENT size. The shell can resize/maximize the window, so apps should read this
 // each frame and lay out to fill it (fill the background to (cw,ch), stretch full-width
 // elements) instead of using fixed open-time dimensions. Returns 1 if it changed since the
 // last call (so the caller can mark itself dirty and republish). cw/ch may be NULL.
-int    DCWinClientSize(DCWin *win, int *cw, int *ch);
+int DCWinClientSize(DCWin *win, int *cw, int *ch);
 // Universal "redraw needed?": 1 if the window was resized since last frame (the lib's half of
 // the dirty decision - OR it into your own change flag). Doesn't consume the size.
-int    DCWinResized(DCWin *win);
+int DCWinResized(DCWin *win);
 // Fill the WHOLE current client area with one colour (a DCWinFill(0,0,cw,ch,color) that always
 // tracks the live size). The standard first call of a frame so the window fills on resize.
-void   DCWinFillBg(DCWin *win, COLORREF color);
-void   DCWinExec(DCWin *win, const WCHAR *path);  // ask the shell to launch an app
-void   DCWinClose(DCWin *win);
+void DCWinFillBg(DCWin *win, COLORREF color);
+void DCWinExec(DCWin *win, const WCHAR *path); // ask the shell to launch an app
+void DCWinClose(DCWin *win);
 
 #endif // DCWLIB_H

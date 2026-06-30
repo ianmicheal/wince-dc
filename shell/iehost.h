@@ -21,11 +21,11 @@
 
 #include <objbase.h>
 #include <oleidl.h>
-#include <docobj.h>      // IOleCommandTarget, OLECMD*
-#include <exdisp.h>      // IWebBrowser2, DWebBrowserEvents2
-#include <exdispid.h>    // DISPID_* event ids
+#include <docobj.h>   // IOleCommandTarget, OLECMD*
+#include <exdisp.h>   // IWebBrowser2, DWebBrowserEvents2
+#include <exdispid.h> // DISPID_* event ids
 
-struct IHTMLWindow2;     // mshtml.h (full def only needed in iehost.cpp, for ScrollBy)
+struct IHTMLWindow2; // mshtml.h (full def only needed in iehost.cpp, for ScrollBy)
 
 // One concrete container site multiply-inheriting every interface the control
 // asks its host for. AddRef/Release/QueryInterface are overridden once; the COM
@@ -36,98 +36,101 @@ class CBrowserHost : public IOleClientSite,
                      public IOleCommandTarget,
                      public DWebBrowserEvents2
 {
-public:
-    CBrowserHost(HWND hwndFrame, const RECT *prc);
-    ~CBrowserHost(void);
+  public:
+	CBrowserHost(HWND hwndFrame, const RECT *prc);
+	~CBrowserHost(void);
 
-    // --- app-facing API ---------------------------------------------------
-    BOOL    Create(void);                       // CoCreate + in-place activate + event sink
-    void    Destroy(void);
-    HWND    GetControlWindow(void) const { return _hwnd; }
-    void    SetRect(const RECT *prc);           // relayout the control (resize)
-    HRESULT Navigate(LPCWSTR url);        // (WinInet path - unused on DC; kept for about:blank)
-    HRESULT LoadUrl(LPCWSTR url);         // fetch via winsock and render the bytes into the control
-    void    PumpPending(void);            // service a link the BeforeNavigate2 hook captured+cancelled
-    HRESULT GoBack(void);
-    HRESULT GoForward(void);
-    HRESULT Refresh(void);
-    HRESULT Stop(void);
-    HRESULT ScrollBy(int dx, int dy);           // scroll the document via IHTMLWindow2
-    HRESULT TranslateAccel(MSG *pMsg);          // give the control first crack at a key msg
+	// --- app-facing API ---------------------------------------------------
+	BOOL Create(void); // CoCreate + in-place activate + event sink
+	void Destroy(void);
+	HWND GetControlWindow(void) const
+	{
+		return _hwnd;
+	}
+	void SetRect(const RECT *prc); // relayout the control (resize)
+	HRESULT Navigate(LPCWSTR url); // (WinInet path - unused on DC; kept for about:blank)
+	HRESULT LoadUrl(LPCWSTR url);  // fetch via winsock and render the bytes into the control
+	void PumpPending(void);        // service a link the BeforeNavigate2 hook captured+cancelled
+	HRESULT GoBack(void);
+	HRESULT GoForward(void);
+	HRESULT Refresh(void);
+	HRESULT Stop(void);
+	HRESULT ScrollBy(int dx, int dy);  // scroll the document via IHTMLWindow2
+	HRESULT TranslateAccel(MSG *pMsg); // give the control first crack at a key msg
 
-    // --- IUnknown ---------------------------------------------------------
-    STDMETHOD(QueryInterface)(REFIID riid, void **ppv);
-    STDMETHOD_(ULONG, AddRef)(void);
-    STDMETHOD_(ULONG, Release)(void);
+	// --- IUnknown ---------------------------------------------------------
+	STDMETHOD(QueryInterface)(REFIID riid, void **ppv);
+	STDMETHOD_(ULONG, AddRef)(void);
+	STDMETHOD_(ULONG, Release)(void);
 
-    // --- IOleClientSite ---------------------------------------------------
-    STDMETHOD(SaveObject)(void);
-    STDMETHOD(GetMoniker)(DWORD, DWORD, IMoniker **);
-    STDMETHOD(GetContainer)(IOleContainer **);
-    STDMETHOD(ShowObject)(void);
-    STDMETHOD(OnShowWindow)(BOOL);
-    STDMETHOD(RequestNewObjectLayout)(void);
+	// --- IOleClientSite ---------------------------------------------------
+	STDMETHOD(SaveObject)(void);
+	STDMETHOD(GetMoniker)(DWORD, DWORD, IMoniker **);
+	STDMETHOD(GetContainer)(IOleContainer **);
+	STDMETHOD(ShowObject)(void);
+	STDMETHOD(OnShowWindow)(BOOL);
+	STDMETHOD(RequestNewObjectLayout)(void);
 
-    // --- IOleWindow (base of IOleInPlaceSite) -----------------------------
-    STDMETHOD(GetWindow)(HWND *);
-    STDMETHOD(ContextSensitiveHelp)(BOOL);
+	// --- IOleWindow (base of IOleInPlaceSite) -----------------------------
+	STDMETHOD(GetWindow)(HWND *);
+	STDMETHOD(ContextSensitiveHelp)(BOOL);
 
-    // --- IOleInPlaceSite --------------------------------------------------
-    STDMETHOD(CanInPlaceActivate)(void);
-    STDMETHOD(OnInPlaceActivate)(void);
-    STDMETHOD(OnUIActivate)(void);
-    STDMETHOD(GetWindowContext)(IOleInPlaceFrame **, IOleInPlaceUIWindow **,
-                                LPRECT, LPRECT, LPOLEINPLACEFRAMEINFO);
-    STDMETHOD(Scroll)(SIZE);
-    STDMETHOD(OnUIDeactivate)(BOOL);
-    STDMETHOD(OnInPlaceDeactivate)(void);
-    STDMETHOD(DiscardUndoState)(void);
-    STDMETHOD(DeactivateAndUndo)(void);
-    STDMETHOD(OnPosRectChange)(LPCRECT);
+	// --- IOleInPlaceSite --------------------------------------------------
+	STDMETHOD(CanInPlaceActivate)(void);
+	STDMETHOD(OnInPlaceActivate)(void);
+	STDMETHOD(OnUIActivate)(void);
+	STDMETHOD(GetWindowContext)(IOleInPlaceFrame **, IOleInPlaceUIWindow **, LPRECT, LPRECT,
+	                            LPOLEINPLACEFRAMEINFO);
+	STDMETHOD(Scroll)(SIZE);
+	STDMETHOD(OnUIDeactivate)(BOOL);
+	STDMETHOD(OnInPlaceDeactivate)(void);
+	STDMETHOD(DiscardUndoState)(void);
+	STDMETHOD(DeactivateAndUndo)(void);
+	STDMETHOD(OnPosRectChange)(LPCRECT);
 
-    // --- IOleContainer ----------------------------------------------------
-    STDMETHOD(ParseDisplayName)(IBindCtx *, LPOLESTR, ULONG *, IMoniker **);
-    STDMETHOD(EnumObjects)(DWORD, IEnumUnknown **);
-    STDMETHOD(LockContainer)(BOOL);
+	// --- IOleContainer ----------------------------------------------------
+	STDMETHOD(ParseDisplayName)(IBindCtx *, LPOLESTR, ULONG *, IMoniker **);
+	STDMETHOD(EnumObjects)(DWORD, IEnumUnknown **);
+	STDMETHOD(LockContainer)(BOOL);
 
-    // --- IOleCommandTarget ------------------------------------------------
-    STDMETHOD(QueryStatus)(const GUID *, ULONG, OLECMD *, OLECMDTEXT *);
-    STDMETHOD(Exec)(const GUID *, DWORD, DWORD, VARIANTARG *, VARIANTARG *);
+	// --- IOleCommandTarget ------------------------------------------------
+	STDMETHOD(QueryStatus)(const GUID *, ULONG, OLECMD *, OLECMDTEXT *);
+	STDMETHOD(Exec)(const GUID *, DWORD, DWORD, VARIANTARG *, VARIANTARG *);
 
-    // --- IDispatch (DWebBrowserEvents2 sink) -------------------------------
-    STDMETHOD(GetTypeInfoCount)(UINT *);
-    STDMETHOD(GetTypeInfo)(UINT, LCID, ITypeInfo **);
-    STDMETHOD(GetIDsOfNames)(REFIID, OLECHAR **, UINT, LCID, DISPID *);
-    STDMETHOD(Invoke)(DISPID, REFIID, LCID, WORD, DISPPARAMS *, VARIANT *,
-                      EXCEPINFO *, UINT *);
+	// --- IDispatch (DWebBrowserEvents2 sink) -------------------------------
+	STDMETHOD(GetTypeInfoCount)(UINT *);
+	STDMETHOD(GetTypeInfo)(UINT, LCID, ITypeInfo **);
+	STDMETHOD(GetIDsOfNames)(REFIID, OLECHAR **, UINT, LCID, DISPID *);
+	STDMETHOD(Invoke)(DISPID, REFIID, LCID, WORD, DISPPARAMS *, VARIANT *, EXCEPINFO *, UINT *);
 
-private:
-    HRESULT InitEvents(void);
-    HRESULT GetHtmlWindow(IHTMLWindow2 **ppWin);
+  private:
+	HRESULT InitEvents(void);
+	HRESULT GetHtmlWindow(IHTMLWindow2 **ppWin);
 
-    ULONG                    _refs;
-    HWND                     _frame;     // our top-level frame window (parent of the control)
-    HWND                     _hwnd;      // the control's window (from IOleWindow::GetWindow)
-    RECT                     _rc;        // control rect within the frame
-    IWebBrowser2            *_pWB2;
-    IOleObject              *_pOle;
-    IOleInPlaceObject       *_pIPO;
-    IOleInPlaceActiveObject *_pIPAO;
-    IConnectionPoint        *_pCP;
-    DWORD                    _cookie;
+	ULONG _refs;
+	HWND _frame; // our top-level frame window (parent of the control)
+	HWND _hwnd;  // the control's window (from IOleWindow::GetWindow)
+	RECT _rc;    // control rect within the frame
+	IWebBrowser2 *_pWB2;
+	IOleObject *_pOle;
+	IOleInPlaceObject *_pIPO;
+	IOleInPlaceActiveObject *_pIPAO;
+	IConnectionPoint *_pCP;
+	DWORD _cookie;
 };
 
 #endif // __cplusplus
 
 // --- UI hooks: implemented by iexplore.cpp, called from the event sink ----
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
-void UiOnNavigate(const WCHAR *url);     // BEFORENAVIGATE2 / NAVIGATECOMPLETE2 -> new address
-void UiOnTitle(const WCHAR *title);      // TITLECHANGE
-void UiOnStatus(const WCHAR *status);    // STATUSTEXTCHANGE / progress text
-void UiOnBusy(int busy);                 // DOWNLOADBEGIN(1) / DOCUMENTCOMPLETE(0)
-void UiOnSecure(int secure);             // SECURITYICONCHANGE
+	void UiOnNavigate(const WCHAR *url);  // BEFORENAVIGATE2 / NAVIGATECOMPLETE2 -> new address
+	void UiOnTitle(const WCHAR *title);   // TITLECHANGE
+	void UiOnStatus(const WCHAR *status); // STATUSTEXTCHANGE / progress text
+	void UiOnBusy(int busy);              // DOWNLOADBEGIN(1) / DOCUMENTCOMPLETE(0)
+	void UiOnSecure(int secure);          // SECURITYICONCHANGE
 #ifdef __cplusplus
 }
 #endif
