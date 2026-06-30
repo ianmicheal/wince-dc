@@ -45,16 +45,16 @@ static IFlashDevice *OpenDev(void)
 	return pDev;
 }
 
-static void FillDesc(FSFILEDESC *pFd, int bytes)
+static void FillDesc(FSFILEDESC *pFd, const char *pszFile, int bytes)
 {
 	int nBlk = (bytes + 511) & ~511;
 	memset(pFd, 0, sizeof(*pFd));
 	pFd->dwSize = sizeof(*pFd);
 	pFd->dwFlags = FSFD_CREATE_FILE;
 	pFd->dwBytesRequired = nBlk < 512 ? 512 : nBlk;
-	strcpy(pFd->szFileName, VMU_FILE);
+	strcpy(pFd->szFileName, pszFile);
 	strcpy(pFd->szVMSComment, "DCWin");
-	strcpy(pFd->szBootROMComment, "DCWin desktop shortcuts");
+	strcpy(pFd->szBootROMComment, "DCWin settings");
 	pFd->bStatus = FS_STATUS_DATA_FILE;
 	pFd->bCopy = FS_COPY_ENABLED;
 	pFd->fsfileicon.bAnimationFrames = 1; // minimal (solid) icon, palette[0]=white
@@ -62,6 +62,11 @@ static void FillDesc(FSFILEDESC *pFd, int bytes)
 }
 
 int VmuSave(const void *pvData, int len)
+{
+	return VmuSaveAs(VMU_FILE, pvData, len);
+}
+
+int VmuSaveAs(const char *pszFile, const void *pvData, int len)
 {
 	IFlashDevice *pDev = NULL;
 	IFlashFile *pFile = NULL;
@@ -77,11 +82,11 @@ int VmuSave(const void *pvData, int len)
 		pDev = OpenDev();
 		if (pDev)
 		{
-			HRESULT hr = pDev->lpVtbl->OpenFlashFileByName(pDev, &pFile, VMU_FILE);
+			HRESULT hr = pDev->lpVtbl->OpenFlashFileByName(pDev, &pFile, (char *)pszFile);
 			if (FAILED(hr) || !pFile) // doesn't exist yet -> create it
 			{
 				pFile = NULL;
-				FillDesc(&fd, len);
+				FillDesc(&fd, pszFile, len);
 				hr = pDev->lpVtbl->CreateFlashFile(pDev, &pFile, &fd);
 			}
 			if (SUCCEEDED(hr) && pFile)
@@ -107,6 +112,11 @@ int VmuSave(const void *pvData, int len)
 
 int VmuLoad(void *pvData, int maxlen, int *outlen)
 {
+	return VmuLoadAs(VMU_FILE, pvData, maxlen, outlen);
+}
+
+int VmuLoadAs(const char *pszFile, void *pvData, int maxlen, int *outlen)
+{
 	IFlashDevice *pDev = NULL;
 	IFlashFile *pFile = NULL;
 	BYTE abBlk[512];
@@ -118,7 +128,8 @@ int VmuLoad(void *pvData, int maxlen, int *outlen)
 	__try
 	{
 		pDev = OpenDev();
-		if (pDev && SUCCEEDED(pDev->lpVtbl->OpenFlashFileByName(pDev, &pFile, VMU_FILE)) && pFile)
+		if (pDev && SUCCEEDED(pDev->lpVtbl->OpenFlashFileByName(pDev, &pFile, (char *)pszFile)) &&
+		    pFile)
 		{
 			if (SUCCEEDED(pFile->lpVtbl->Read(pFile, 0, sizeof(abBlk), abBlk)))
 			{
