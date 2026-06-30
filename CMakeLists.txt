@@ -166,7 +166,7 @@ add_sh_module(dcwplay TYPE exe ENTRY WinMainCRTStartup OUT dcwplay.exe
 # the checked DLLs are opt-in (they assert/break some titles, e.g. DDHAL under DirectDraw).
 set(KERNEL  "retail"       CACHE STRING "image kernel: retail (silent nknodbg) or debug (SCIF-console nkscifkd)")
 set(DLLS    "retail"       CACHE STRING "system DLLs: retail (stock) or debug (checked overlay)")
-set(AUTORUN "dcwboot.exe"  CACHE STRING "program baked into the image's HKLM\\init Autorun value")
+set(AUTORUN "dcshell.exe"  CACHE STRING "program baked into the image's HKLM\\init Autorun value")
 set_property(CACHE KERNEL PROPERTY STRINGS retail debug)
 set_property(CACHE DLLS   PROPERTY STRINGS retail debug)
 
