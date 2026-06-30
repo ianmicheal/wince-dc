@@ -310,6 +310,13 @@ static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0,
 	D3DTLVERTEX *pV;
 	WORD *pIx;
 	int nBase, nIdx;
+	// Depth = submission order. We paint back-to-front (desktop -> windows -> taskbar -> cursor),
+	// but the PVR2 is a tile-based deferred renderer: it AUTO-SORTS blended polygons by depth, so
+	// every quad at the same z (the old sz=0) sorts ambiguously on real hardware and earlier layers
+	// (e.g. desktop icon labels) bleed through later windows. Flycast happens to keep submit order,
+	// hiding the bug. Giving each successive quad a slightly nearer z makes the hardware sort match
+	// paint order. 1/65536 step over the 16384-quad ceiling stays well inside [0.75, 1.0].
+	float fZ = 1.0f - (float)s_nQuad / 65536.0f;
 	if (!GrowQuads(&s_pVb, &s_pIb, &s_pQtex, &s_nCap, s_nQuad + 1, s_nQuad))
 		return; // only at the ceiling
 	// Software clip to the active clip rect, adjusting UVs so textured quads (glyphs/icons)
@@ -346,7 +353,7 @@ static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0,
 	pV = &s_pVb[nBase];
 	pV[0].sx = x0;
 	pV[0].sy = y0;
-	pV[0].sz = 0;
+	pV[0].sz = fZ;
 	pV[0].rhw = 1;
 	pV[0].color = dwCol;
 	pV[0].specular = 0;
@@ -354,7 +361,7 @@ static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0,
 	pV[0].tv = v0;
 	pV[1].sx = x1;
 	pV[1].sy = y0;
-	pV[1].sz = 0;
+	pV[1].sz = fZ;
 	pV[1].rhw = 1;
 	pV[1].color = dwCol;
 	pV[1].specular = 0;
@@ -362,7 +369,7 @@ static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0,
 	pV[1].tv = v0;
 	pV[2].sx = x0;
 	pV[2].sy = y1;
-	pV[2].sz = 0;
+	pV[2].sz = fZ;
 	pV[2].rhw = 1;
 	pV[2].color = dwCol;
 	pV[2].specular = 0;
@@ -370,7 +377,7 @@ static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0,
 	pV[2].tv = v1;
 	pV[3].sx = x1;
 	pV[3].sy = y1;
-	pV[3].sz = 0;
+	pV[3].sz = fZ;
 	pV[3].rhw = 1;
 	pV[3].color = dwCol;
 	pV[3].specular = 0;
