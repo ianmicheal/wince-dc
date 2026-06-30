@@ -39,6 +39,9 @@ extern "C"
 	//
 	HDC GfxLockDC(void);
 	void GfxUnlockDC(HDC hdc);
+	// Pass bg = GFX_TRANSPARENT to draw glyphs only (no background quad) - for text over the
+	// wallpaper (desktop icon labels). Any real COLORREF draws an opaque box behind the run.
+#define GFX_TRANSPARENT ((COLORREF)0xFFFFFFFFu)
 	void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const WCHAR *text);
 	int GfxTextWidth(HFONT font, const WCHAR *text); // pixel width of text in the given font
 
@@ -95,6 +98,17 @@ extern "C"
 	//
 	BOOL GfxInitPageLayer(void);
 	void GfxBlitPage(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh);
+
+	// Desktop wallpaper: load a 24-bit BMP from disc into a VRAM texture and draw it as a quad
+	// under the icons. GfxSetWallpaper(NULL) clears it. GfxBlitWallpaper is called inside the
+	// desktop-cache recording; GfxReloadWallpaper re-uploads after a fullscreen-app surface loss.
+#define GFXWALL_STRETCH 0 // scale to fill 640x480
+#define GFXWALL_CENTER  1 // 1:1, centred on the desktop
+	BOOL GfxSetWallpaper(const WCHAR *path, int style);
+	void GfxReloadWallpaper(void);
+	void GfxBlitWallpaper(void);
+	BOOL GfxDrawWallpaperRect(int dx, int dy, int dw,
+	                          int dh); // wallpaper scaled into a rect (preview)
 
 	extern HFONT g_FontUI;
 	extern HFONT g_FontBold;

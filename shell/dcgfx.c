@@ -63,6 +63,15 @@ static D3DTEXTUREHANDLE s_hPage = 0;
 #define PAGE_TW 1024 // page texture is pow2 and >= 640x480
 #define PAGE_TH 512
 
+// Wallpaper layer (desktop background): a decoded BMP uploaded into a 565 VRAM texture, drawn as
+// a quad under the icons. Same pow2 texture geometry as the page layer (1024x512 holds 640x480).
+static LPDIRECTDRAWSURFACE s_pWallSurf = NULL; // VRAM 565 texture
+static LPDIRECT3DTEXTURE2 s_pWallTex = NULL;
+static D3DTEXTUREHANDLE s_hWall = 0;
+static int s_nWallW = 0, s_nWallH = 0;     // wallpaper pixel size (clamped to PAGE_TW/TH)
+static int s_nWallStyle = GFXWALL_STRETCH; // remembered draw style
+static WCHAR s_szWallPath[MAX_PATH] = {0}; // remembered path (re-upload after a surface loss)
+
 // Retained quad list (the scene), replayed every frame; grown on demand. Indices are base-relative.
 static D3DTLVERTEX *s_pVb;
 static WORD *s_pIb;
@@ -742,6 +751,17 @@ static void DestroySurfaces(void)
 		IDirectDrawSurface_Release(s_pPageSurf);
 		s_pPageSurf = NULL;
 	}
+	s_hWall = 0; // wallpaper texture (re-uploaded by GfxReloadWallpaper after CreateSurfaces)
+	if (s_pWallTex)
+	{
+		IDirect3DTexture2_Release(s_pWallTex);
+		s_pWallTex = NULL;
+	}
+	if (s_pWallSurf)
+	{
+		IDirectDrawSurface_Release(s_pWallSurf);
+		s_pWallSurf = NULL;
+	}
 	if (s_pGdiSurf)
 	{
 		IDirectDrawSurface_Release(s_pGdiSurf);
@@ -869,7 +889,10 @@ void GfxText(HDC hdc, int x, int y, COLORREF fg, COLORREF bg, HFONT font, const 
 		WCHAR ch = (*p < GFIRST || *p > GLAST) ? '?' : *p;
 		nRunW += s_aGlyph[nFi][ch - GFIRST].adv;
 	}
-	if (nRunW > 0) // one opaque bg quad for the whole run
+	// One opaque bg quad behind the run - UNLESS the caller asked for a transparent background
+	// (GFX_TRANSPARENT), e.g. desktop icon labels over the wallpaper. Glyphs alpha-blend either
+	// way.
+	if (bg != GFX_TRANSPARENT && nRunW > 0)
 		PushQuad((float)x, (float)y, (float)(x + nRunW), (float)(y + GH), 0, 0, 0, 0, dwBgc, 0);
 	nCx = x;
 	for (p = text; *p; p++)
@@ -996,9 +1019,10 @@ BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor)
 			D3DTEXTUREHANDLE th;
 			while (j < s_nQuad && s_pQtex[j] == bTex)
 				j++;
-			th = (bTex == 2)   ? s_hPage
+			th = (bTex == 3)   ? s_hWall
+			     : (bTex == 2) ? s_hPage
 			     : (bTex == 1) ? s_hAtlas
-			                   : 0; // 2 = page, 1 = atlas, 0 = solid
+			                   : 0; // 3 = wallpaper, 2 = page, 1 = atlas, 0 = solid
 			IDirect3DDevice2_SetRenderState(s_pDev, D3DRENDERSTATE_TEXTUREHANDLE, th);
 			// Pass ONLY this run's vertices (&s_pVb[i*4], (j-i)*4) with the base-relative
 			// index template s_pIb[0..]. Passing the whole array each batch made the TA
@@ -1176,6 +1200,210 @@ void GfxBlitPage(int sx, int sy, int sw, int sh, int dx, int dy, int dw, int dh)
 	         (float)sw / PAGE_TW, (float)sh / PAGE_TH, 0xFFFFFFFF, 2);
 }
 
+// --- wallpaper -------------------------------------------------------------------
+// Create the VRAM 565 wallpaper texture (once; recreated after a surface loss).
+static BOOL EnsureWallTexture(void)
+{
+	DDSURFACEDESC sd;
+	if (s_pWallSurf)
+	{
+		if (!s_hWall && s_pWallTex) // handle was cleared (e.g. by a "(None)") - re-fetch it
+			IDirect3DTexture2_GetHandle(s_pWallTex, s_pDev, &s_hWall);
+		return TRUE;
+	}
+	if (!s_pDd || !s_pDev)
+		return FALSE;
+	memset(&sd, 0, sizeof(sd));
+	sd.dwSize = sizeof(sd);
+	sd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+	sd.ddsCaps.dwCaps = DDSCAPS_TEXTURE | DDSCAPS_VIDEOMEMORY;
+	sd.dwWidth = PAGE_TW;
+	sd.dwHeight = PAGE_TH;
+	sd.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+	sd.ddpfPixelFormat.dwFlags = DDPF_RGB;
+	sd.ddpfPixelFormat.dwRGBBitCount = 16;
+	sd.ddpfPixelFormat.dwRBitMask = 0xF800;
+	sd.ddpfPixelFormat.dwGBitMask = 0x07E0;
+	sd.ddpfPixelFormat.dwBBitMask = 0x001F;
+	if (IDirectDraw_CreateSurface(s_pDd, &sd, &s_pWallSurf, NULL) != DD_OK || !s_pWallSurf)
+		return FALSE;
+	if (IDirectDrawSurface_QueryInterface(s_pWallSurf, &IID_IDirect3DTexture2,
+	                                      (void **)&s_pWallTex) != DD_OK ||
+	    IDirect3DTexture2_GetHandle(s_pWallTex, s_pDev, &s_hWall) != DD_OK)
+		return FALSE;
+	return TRUE;
+}
+
+// Load a 24-bit BI_RGB BMP from disc, convert to 565, upload into the wallpaper texture. style is
+// GFXWALL_STRETCH (fill 640x480) or GFXWALL_CENTER (1:1, centred). The path + style are remembered
+// so GfxReloadWallpaper can re-upload after the surfaces are torn down for a fullscreen app.
+BOOL GfxSetWallpaper(const WCHAR *pszPath, int nStyle)
+{
+	HANDLE hf;
+	DWORD dwSize, dwRead = 0;
+	BYTE *pbFile = NULL;
+	BITMAPFILEHEADER *pbf;
+	BITMAPINFOHEADER *pbi;
+	LPDIRECTDRAWSURFACE pStage = NULL;
+	DDSURFACEDESC sd;
+	BOOL bOk = FALSE;
+
+	if (pszPath != s_szWallPath) // remember (skip the self-copy on a reload)
+	{
+		int n = 0;
+		if (pszPath)
+			for (; pszPath[n] && n < MAX_PATH - 1; n++)
+				s_szWallPath[n] = pszPath[n];
+		s_szWallPath[n] = 0;
+	}
+	s_nWallStyle = nStyle;
+	if (!s_szWallPath[0]) // cleared -> no wallpaper (keep s_hWall valid; s_nWallW=0 stops drawing)
+	{
+		s_nWallW = s_nWallH = 0;
+		return FALSE;
+	}
+
+	hf = CreateFileW(s_szWallPath, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+	                 FILE_ATTRIBUTE_NORMAL, NULL);
+	if (hf == INVALID_HANDLE_VALUE)
+		return FALSE;
+	dwSize = GetFileSize(hf, NULL);
+	if (dwSize > sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) && dwSize < 4u * 1024 * 1024)
+		pbFile = (BYTE *)LocalAlloc(LMEM_FIXED, dwSize);
+	if (pbFile && ReadFile(hf, pbFile, dwSize, &dwRead, NULL) && dwRead == dwSize)
+	{
+		pbf = (BITMAPFILEHEADER *)pbFile;
+		pbi = (BITMAPINFOHEADER *)(pbFile + sizeof(BITMAPFILEHEADER));
+		if (pbf->bfType == 0x4D42 && pbi->biBitCount == 24 && pbi->biCompression == BI_RGB &&
+		    pbf->bfOffBits < dwSize)
+		{
+			int w = pbi->biWidth;
+			int bTopDown = pbi->biHeight < 0;
+			int h = bTopDown ? -pbi->biHeight : pbi->biHeight;
+			int srcRow = ((w * 3) + 3) & ~3; // BMP rows are DWORD-aligned
+			int tw = w > PAGE_TW ? PAGE_TW : w;
+			int th = h > PAGE_TH ? PAGE_TH : h;
+			BYTE *pbBits = pbFile + pbf->bfOffBits;
+			if (w > 0 && h > 0 && pbf->bfOffBits + (DWORD)srcRow * h <= dwSize)
+			{
+				memset(&sd, 0, sizeof(sd)); // system-mem 565 staging surface
+				sd.dwSize = sizeof(sd);
+				sd.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+				sd.ddsCaps.dwCaps = DDSCAPS_OFFSCREENPLAIN | DDSCAPS_SYSTEMMEMORY;
+				sd.dwWidth = tw;
+				sd.dwHeight = th;
+				sd.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+				sd.ddpfPixelFormat.dwFlags = DDPF_RGB;
+				sd.ddpfPixelFormat.dwRGBBitCount = 16;
+				sd.ddpfPixelFormat.dwRBitMask = 0xF800;
+				sd.ddpfPixelFormat.dwGBitMask = 0x07E0;
+				sd.ddpfPixelFormat.dwBBitMask = 0x001F;
+				if (s_pDd && IDirectDraw_CreateSurface(s_pDd, &sd, &pStage, NULL) == DD_OK &&
+				    pStage)
+				{
+					DDSURFACEDESC lk;
+					memset(&lk, 0, sizeof(lk));
+					lk.dwSize = sizeof(lk);
+					if (IDirectDrawSurface_Lock(pStage, NULL, &lk, DDLOCK_WAIT, NULL) == DD_OK)
+					{
+						// 4x4 ordered (Bayer) dither: spreads the 24->16-bit (565) quantization
+						// error so gradients band far less on the DC's 16-bit display.
+						static const int aBayer[16] = {0, 8,  2, 10, 12, 4, 14, 6,
+						                               3, 11, 1, 9,  15, 7, 13, 5};
+						int x, y;
+						for (y = 0; y < th; y++)
+						{
+							int srcY = bTopDown ? y : (h - 1 - y); // BMP is bottom-up
+							const BYTE *s = pbBits + srcY * srcRow;
+							WORD *d = (WORD *)((BYTE *)lk.lpSurface + y * lk.lPitch);
+							for (x = 0; x < tw; x++, s += 3)
+							{
+								int e = aBayer[((y & 3) << 2) | (x & 3)] - 8; // -8..7
+								int B = s[0] + (e >> 1), G = s[1] + (e >> 2), R = s[2] + (e >> 1);
+								if (R < 0)
+									R = 0;
+								else if (R > 255)
+									R = 255;
+								if (G < 0)
+									G = 0;
+								else if (G > 255)
+									G = 255;
+								if (B < 0)
+									B = 0;
+								else if (B > 255)
+									B = 255;
+								d[x] = (WORD)(((R >> 3) << 11) | ((G >> 2) << 5) | (B >> 3));
+							}
+						}
+						IDirectDrawSurface_Unlock(pStage, NULL);
+						if (EnsureWallTexture())
+						{
+							RECT src;
+							src.left = 0;
+							src.top = 0;
+							src.right = tw;
+							src.bottom = th;
+							IDirectDrawSurface_BltFast(s_pWallSurf, 0, 0, pStage, &src,
+							                           DDBLTFAST_WAIT);
+							s_nWallW = tw;
+							s_nWallH = th;
+							bOk = TRUE;
+						}
+					}
+				}
+			}
+		}
+	}
+	if (pStage)
+		IDirectDrawSurface_Release(pStage);
+	if (pbFile)
+		LocalFree(pbFile);
+	CloseHandle(hf);
+	if (!bOk)
+		s_nWallW = s_nWallH = 0; // load failed -> draw nothing (keep s_hWall valid for next time)
+	return bOk;
+}
+
+// Re-upload the remembered wallpaper after the surfaces were recreated (post fullscreen app).
+void GfxReloadWallpaper(void)
+{
+	if (s_szWallPath[0])
+		GfxSetWallpaper(s_szWallPath, s_nWallStyle);
+}
+
+// Queue the wallpaper quad (call inside the desktop-cache recording, before the icons).
+void GfxBlitWallpaper(void)
+{
+	float uu, vv;
+	if (!s_hWall || s_nWallW <= 0 || s_nWallH <= 0)
+		return;
+	uu = (float)s_nWallW / PAGE_TW;
+	vv = (float)s_nWallH / PAGE_TH;
+	if (s_nWallStyle == GFXWALL_CENTER)
+	{
+		int dx = (SCREEN_W - s_nWallW) / 2, dy = (SCREEN_H - s_nWallH) / 2;
+		if (dx < 0)
+			dx = 0;
+		if (dy < 0)
+			dy = 0;
+		PushQuad((float)dx, (float)dy, (float)(dx + s_nWallW), (float)(dy + s_nWallH), 0.0f, 0.0f,
+		         uu, vv, 0xFFFFFFFF, 3);
+	}
+	else // GFXWALL_STRETCH: fill the screen (the taskbar layer overpaints the bottom strip)
+		PushQuad(0.0f, 0.0f, (float)SCREEN_W, (float)SCREEN_H, 0.0f, 0.0f, uu, vv, 0xFFFFFFFF, 3);
+}
+
+// Draw the current wallpaper scaled into an arbitrary rect (the Display Properties monitor
+// preview). Returns FALSE if no wallpaper is set so the caller can fill the rect itself.
+BOOL GfxDrawWallpaperRect(int dx, int dy, int dw, int dh)
+{
+	if (!s_hWall || s_nWallW <= 0 || s_nWallH <= 0)
+		return FALSE;
+	PushQuad((float)dx, (float)dy, (float)(dx + dw), (float)(dy + dh), 0.0f, 0.0f,
+	         (float)s_nWallW / PAGE_TW, (float)s_nWallH / PAGE_TH, 0xFFFFFFFF, 3);
+	return TRUE;
+}
+
 int GfxLaunch(const WCHAR *path, GFXPOLLFN pfnPoll)
 {
 	PROCESS_INFORMATION pi;
@@ -1213,6 +1441,7 @@ int GfxLaunch(const WCHAR *path, GFXPOLLFN pfnPoll)
 	{
 		InitD3D();
 		BuildAtlas();
+		GfxReloadWallpaper(); // surfaces were torn down for the app -> re-upload the wallpaper
 	}
 	return nKill;
 }
