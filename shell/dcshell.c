@@ -206,6 +206,17 @@ static void DeskInit(void)
 		s_anDeskUser[i] = -1;
 	}
 	s_cDesk = (int)DEFAULT_N;
+	// Internet Explorer exists only in the IMGHTML image (chainloaded via dcwboot's boot menu); the
+	// lean image has no iexplore.exe in ROM. Show its built-in icon only when it's actually present,
+	// so the normal desktop stays clean. It launches via the cooperative-fullscreen path (ShellLaunch
+	// -> IsPollSafeFullscreen -> GfxLaunch), like any iexplore.exe shortcut.
+	if (GetFileAttributesW(L"\\Windows\\iexplore.exe") != 0xFFFFFFFF && s_cDesk < MAXDESK)
+	{
+		static const SHORTCUT s_ie = {L"Internet Explorer", NULL, L"iexplore.exe", ICON_IE};
+		s_aDesk[s_cDesk] = s_ie;
+		s_anDeskUser[s_cDesk] = -1;
+		s_cDesk++;
+	}
 	LoadShortcuts();
 	DeskPosInit();
 }
@@ -381,35 +392,6 @@ static BOOL IsDcwApp(const WCHAR *pszPath)
 	return (pszBase[0] | 32) == 'd' && (pszBase[1] | 32) == 'c' && (pszBase[2] | 32) == 'w';
 }
 
-// Panic-combo poll for a fullscreen app (passed to GfxLaunch, called ~30ms while it runs).
-// The shell kept its keyboard + controller acquired across the hand-off, so we read them
-// directly. Keyboard ALT+F4 and the controller's START+A both kill; CTRL+ALT+DEL kills and
-// returns a distinct code so ShellLaunch can pop the task manager afterwards.
-static int ShellFullscreenPoll(void)
-{
-	int nHk = DInHotkey();
-	if (nHk != DIN_HK_NONE)
-		return nHk;
-	if (DInPadCombo())
-		return DIN_HK_ALTF4; // START+A -> kill (controller analogue of ALT+F4)
-	return DIN_HK_NONE;
-}
-
-// Can the shell safely watch input while THIS fullscreen app runs? Only our own CE apps use
-// cooperative (CE-driver-mediated, non-exclusive) DirectInput, so the shell can keep its
-// keyboard + controller acquired and poll the panic combos. A retail game (e.g. 4x4 Evo)
-// takes the Maple bus / DirectInput EXCLUSIVELY and drives raw Maple DMA itself - if the shell
-// so much as reads the bus while it runs, the game faults to the BIOS. For those we drop ALL
-// input and never touch the bus (no shell-side kill; the game owns its own exit).
-static int IsPollSafeFullscreen(const WCHAR *pszExe)
-{
-	const WCHAR *pszBase = pszExe, *p;
-	for (p = pszExe; *p; p++)
-		if (*p == L'\\' || *p == L'/')
-			pszBase = p + 1;
-	return lstrcmpiW(pszBase, L"iexplore.exe") == 0;
-}
-
 static void ShellLaunch(const WCHAR *pszCmd)
 {
 	WCHAR szExe[MAX_PATH];
@@ -422,27 +404,17 @@ static void ShellLaunch(const WCHAR *pszCmd)
 		pszArgs = pszCmd + i + 1; // e.g. "dcwplay.exe \CD-ROM\song.mp3"
 	if (IsDcwApp(szExe))
 		LaunchApp(szExe, pszArgs); // windowed, composited (+ optional file argument)
-	else if (IsPollSafeFullscreen(szExe))
-	{
-		// Cooperative fullscreen app: keep keyboard+controller so we can poll the panic combos.
-		int nKill;
-		DbgStr(L"DCSHELL: fullscreen launch (cooperative; panic combos armed)\r\n");
-		DInHandoffToApp();
-		nKill = GfxLaunch(szExe, ShellFullscreenPoll); // run (blocks; polls combos) -> reclaim
-		DInReacquire();                                // app exited / killed -> take input back
-		if (nKill == DIN_HK_CTRLALTDEL)
-			LaunchApp(L"dcwtask.exe", NULL); // CTRL+ALT+DEL -> task manager on the desktop
-		CheckFullscreenCrash(szExe, GfxLastExitCode());
-		s_bDirty = 1;
-		s_bDeskDirty = 1;
-	}
 	else
 	{
-		// Retail game: drop ALL input and do NOT touch the Maple bus while it runs, else it
-		// faults to the BIOS. No shell-side panic kill here - the game manages its own exit.
-		DbgStr(L"DCSHELL: fullscreen launch (exclusive game; full input hand-off)\r\n");
+		// Fullscreen app - our browser OR a retail game. Hand over ALL input + the display and do
+		// NOT poll while it runs. On the DC the shell and the app cannot BOTH hold DirectInput: any
+		// acquire the shell keeps starves the app (the browser came up with dead input), and a
+		// retail game drives the Maple bus raw and faults to the BIOS if we so much as read it. So
+		// we fully release; every fullscreen app manages its own exit (the browser via its own
+		// chrome). Desktop panic combos on WINDOWED apps are unaffected - this is only the hand-off.
+		DbgStr(L"DCSHELL: fullscreen launch (full input hand-off)\r\n");
 		DInRelease();
-		GfxLaunch(szExe, NULL); // run (blocks, INFINITE wait) -> reclaim
+		GfxLaunch(szExe, NULL); // release display -> run (blocks, INFINITE wait) -> reclaim
 		DInReacquire();
 		CheckFullscreenCrash(szExe, GfxLastExitCode());
 		s_bDirty = 1;
@@ -1884,14 +1856,14 @@ static void PublishPointer(int nCursorX, int nCursorY, int bDown)
 	}
 }
 
-// Choose the desktop wallpaper at boot: the user's saved choice from the VMU if present, else the
-// first \CD-ROM\Wallpaper\*.bmp so dropping BMPs on the disc Just Works without touching the UI.
+// Choose the desktop wallpaper at boot: the user's saved choice from the VMU if present, else
+// "(None)" (a clean teal desktop). Drop a BMP via Display Properties to set one.
 static void ApplyDisplayConfig(void)
 {
 	DispCfg c;
 	int nGot = 0, i;
 	ScanWallpapers();
-	s_nCurWall = (s_cWall > 1) ? 1 : 0; // default: first BMP, else none
+	s_nCurWall = 0; // default: (None) - clean teal desktop until the user picks a wallpaper
 	s_nCurStyle = GFXWALL_STRETCH;
 	if (VmuLoadAs(DISP_VMUFILE, &c, sizeof(c), &nGot) && nGot >= (int)sizeof(c) &&
 	    c.dwMagic == DISP_MAGIC)

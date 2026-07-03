@@ -30,7 +30,8 @@
 #define ICON_FILE     5
 #define ICON_SWIRL    6 // Dreamcast swirl (My Dreamcast)
 #define ICON_CURSOR   7 // pointer arrow
-#define ICON_COUNT    8
+#define ICON_IE       8 // Internet Explorer globe (IMGHTML image only)
+#define ICON_COUNT    9
 
 typedef struct
 {

@@ -72,11 +72,22 @@ static int s_nWallW = 0, s_nWallH = 0;     // wallpaper pixel size (clamped to P
 static int s_nWallStyle = GFXWALL_STRETCH; // remembered draw style
 static WCHAR s_szWallPath[MAX_PATH] = {0}; // remembered path (re-upload after a surface loss)
 
-// Retained quad list (the scene), replayed every frame; grown on demand. Indices are base-relative.
-static D3DTLVERTEX *s_pVb;
-static WORD *s_pIb;
-static BYTE *s_pQtex; // tex: 0=solid 1=atlas 2=page
-static int s_nCap, s_nQuad;
+// The scene buffer is backed by a STATIC working buffer (BSS), so the desktop ALWAYS renders: a
+// purely heap-allocated buffer black-screened the shell on real hardware (the PVR2's tile-accelerator
+// reads vertices by DMA, and the process LocalHeap is apparently not where it can reach / can run
+// out, whereas the module's static data always works - Flycast hid it by not DMAing). The heap path
+// only kicks in for rare scenes above QUAD_WORK quads; below it nothing is ever allocated per frame.
+#define QUAD_WORK 2048 // static scene capacity - covers the desktop + a couple of windows
+static D3DTLVERTEX s_aSceneVb[QUAD_WORK * 4];
+static WORD s_aSceneIb[QUAD_WORK * 6];
+static BYTE s_aSceneQt[QUAD_WORK];
+
+// Retained quad list (the scene), replayed every frame. It starts on the static buffer above and
+// only moves to the heap above QUAD_WORK (detected by s_pVb != s_aSceneVb). Indices are base-relative.
+static D3DTLVERTEX *s_pVb = s_aSceneVb;
+static WORD *s_pIb = s_aSceneIb;
+static BYTE *s_pQtex = s_aSceneQt; // tex: 0=solid 1=atlas 2=page
+static int s_nCap = QUAD_WORK, s_nQuad = 0;
 
 // Desktop cache: a cached vertex SUB-LIST (not pixels) prepended each frame; also grown on demand.
 static D3DTLVERTEX *s_pDvb;
@@ -150,6 +161,10 @@ static const char *s_aIconArt[ICON_COUNT][16] = {
     {// ICON_CURSOR
      "K", "KK", "KWK", "KWWK", "KWWWK", "KWWWWK", "KWWWWWK", "KWWWWWWK", "KWWWWWWWK", "KWWWWWKKK",
      "KWWKWWK", "KWK KWWK", "KK   KWWK", "      KWK", "       K", ""},
+    {// ICON_IE - Internet Explorer globe (blue body, white meridian + equator)
+     "", "     BBBBB", "   BBBBBBBBB", "  BBBBBWBBBBB", "  BBBBBWBBBBB", " BBBBBBWBBBBBB",
+     " WWWWWWWWWWWWW", " BBBBBBWBBBBBB", "  BBBBBWBBBBB", "  BBBBBWBBBBB", "   BBBBBBBBB",
+     "     BBBBB", "", "", "", ""},
 };
 
 static COLORREF PalColor(char c)
@@ -253,11 +268,12 @@ static int GrowQuads(D3DTLVERTEX **pVb, WORD **pIb, BYTE **pQt, int *pCap, int n
 		memcpy(pNib, *pIb, (DWORD)nKeep * 6 * sizeof(WORD));
 		memcpy(pNqt, *pQt, (DWORD)nKeep);
 	}
-	if (*pVb)
+	// The scene starts on the static working buffer; never LocalFree that (only heap overflow).
+	if (*pVb && *pVb != s_aSceneVb)
 		LocalFree(*pVb);
-	if (*pIb)
+	if (*pIb && *pIb != s_aSceneIb)
 		LocalFree(*pIb);
-	if (*pQt)
+	if (*pQt && *pQt != s_aSceneQt)
 		LocalFree(*pQt);
 	*pVb = pNvb;
 	*pIb = pNib;
@@ -266,41 +282,20 @@ static int GrowQuads(D3DTLVERTEX **pVb, WORD **pIb, BYTE **pQt, int *pCap, int n
 	return 1;
 }
 
-// Reclaim the live scene after it has stayed small: realloc DOWN to fit `want` (no copy - the frame
-// is drawn and the next rebuilds from scratch). No-op if it wouldn't shrink or if the alloc fails.
+// Reclaim the live scene after it has stayed small: hand the heap overflow back and return to the
+// static working buffer (the static buffer itself is never freed). No content copy - the frame is
+// drawn and the next rebuilds from scratch. No-op if already on the static buffer or still oversized.
 static void ShrinkScene(int nWant)
 {
-	int nc = QUAD_INIT;
-	D3DTLVERTEX *pNvb;
-	WORD *pNib;
-	BYTE *pNqt;
-	while (nc < nWant)
-		nc <<= 1;
-	if (nc >= s_nCap)
+	if (s_pVb == s_aSceneVb || nWant > QUAD_WORK)
 		return;
-	pNvb = (D3DTLVERTEX *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 4 * sizeof(D3DTLVERTEX));
-	pNib = (WORD *)LocalAlloc(LMEM_FIXED, (DWORD)nc * 6 * sizeof(WORD));
-	pNqt = (BYTE *)LocalAlloc(LMEM_FIXED, (DWORD)nc);
-	if (!pNvb || !pNib || !pNqt)
-	{
-		if (pNvb)
-			LocalFree(pNvb);
-		if (pNib)
-			LocalFree(pNib);
-		if (pNqt)
-			LocalFree(pNqt);
-		return;
-	}
-	if (s_pVb)
-		LocalFree(s_pVb);
-	if (s_pIb)
-		LocalFree(s_pIb);
-	if (s_pQtex)
-		LocalFree(s_pQtex);
-	s_pVb = pNvb;
-	s_pIb = pNib;
-	s_pQtex = pNqt;
-	s_nCap = nc;
+	LocalFree(s_pVb);
+	LocalFree(s_pIb);
+	LocalFree(s_pQtex);
+	s_pVb = s_aSceneVb;
+	s_pIb = s_aSceneIb;
+	s_pQtex = s_aSceneQt;
+	s_nCap = QUAD_WORK;
 }
 
 // --- quad list ------------------------------------------------------------------
@@ -310,13 +305,10 @@ static void PushQuad(float x0, float y0, float x1, float y1, float u0, float v0,
 	D3DTLVERTEX *pV;
 	WORD *pIx;
 	int nBase, nIdx;
-	// Depth = submission order. We paint back-to-front (desktop -> windows -> taskbar -> cursor),
-	// but the PVR2 is a tile-based deferred renderer: it AUTO-SORTS blended polygons by depth, so
-	// every quad at the same z (the old sz=0) sorts ambiguously on real hardware and earlier layers
-	// (e.g. desktop icon labels) bleed through later windows. Flycast happens to keep submit order,
-	// hiding the bug. Giving each successive quad a slightly nearer z makes the hardware sort match
-	// paint order. 1/65536 step over the 16384-quad ceiling stays well inside [0.75, 1.0].
-	float fZ = 1.0f - (float)s_nQuad / 65536.0f;
+	// All quads coplanar at z=0 (we paint back-to-front: desktop -> windows -> taskbar -> cursor).
+	// (The per-quad "nearer z" depth trick was reverted - it pushed the first quads to z~1.0, the
+	// far-clip plane, and they got culled on real hardware -> black desktop.)
+	float fZ = 0.0f;
 	if (!GrowQuads(&s_pVb, &s_pIb, &s_pQtex, &s_nCap, s_nQuad + 1, s_nQuad))
 		return; // only at the ceiling
 	// Software clip to the active clip rect, adjusting UVs so textured quads (glyphs/icons)
@@ -812,27 +804,32 @@ BOOL GfxInit(HWND hwnd)
 	return TRUE;
 }
 
-// Release the dynamic quad buffers (scene + desktop cache) back to the heap. They regrow on
-// demand (GrowQuads from QUAD_INIT) the next time the desktop composites, so this is safe to call
-// whenever the shell isn't drawing - e.g. while a fullscreen app owns the screen (frees ~0.5 MB).
+// Hand back the heap quad buffers while the shell isn't drawing (e.g. a fullscreen app owns the
+// screen). The scene returns to its static working buffer (never freed - so the desktop always
+// redraws); only the heap overflow + the whole desktop cache (which regrows on demand) are released.
 void GfxFreeQuads(void)
 {
-	if (s_pVb)
+	if (s_pVb != s_aSceneVb)
+	{
 		LocalFree(s_pVb);
-	if (s_pIb)
 		LocalFree(s_pIb);
-	if (s_pQtex)
 		LocalFree(s_pQtex);
+	}
+	s_pVb = s_aSceneVb;
+	s_pIb = s_aSceneIb;
+	s_pQtex = s_aSceneQt;
+	s_nCap = QUAD_WORK;
+	s_nQuad = 0;
 	if (s_pDvb)
 		LocalFree(s_pDvb);
 	if (s_pDib)
 		LocalFree(s_pDib);
 	if (s_pDtex)
 		LocalFree(s_pDtex);
-	s_pVb = s_pDvb = NULL;
-	s_pIb = s_pDib = NULL;
-	s_pQtex = s_pDtex = NULL;
-	s_nCap = s_nDcap = s_nQuad = s_nDQuad = 0;
+	s_pDvb = NULL;
+	s_pDib = NULL;
+	s_pDtex = NULL;
+	s_nDcap = s_nDQuad = 0;
 }
 
 void GfxShutdown(void)
@@ -1059,8 +1056,8 @@ BOOL GfxPresent(int cursorX, int cursorY, BOOL showCursor)
 		if (++nFrames >= 120)
 		{
 			int nWant = nPeak + (nPeak >> 1) + 32;
-			if (s_nCap > QUAD_INIT && nWant < s_nCap / 2)
-				ShrinkScene(nWant);
+			if (s_pVb != s_aSceneVb && nWant <= QUAD_WORK)
+				ShrinkScene(nWant); // drop heap overflow, return to the static working buffer
 			nPeak = 0;
 			nFrames = 0;
 		}
