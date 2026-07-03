@@ -17,6 +17,12 @@ ENDIF
    dcwnet.exe      $(_FLATRELEASEDIR)$(RELEASEDIR_OS)dcwnet.exe      NK  SH
    dcwlog.exe      $(_FLATRELEASEDIR)$(RELEASEDIR_OS)dcwlog.exe      NK  SH
    dcwboot.exe     $(_FLATRELEASEDIR)$(RELEASEDIR_OS)dcwboot.exe     NK  SH
+;  The IE browser launcher lives in ROM only in the IMGHTML (Trident) image - which is chainloaded
+;  from an arbitrary disc by dcwboot, so it can't rely on \CD-ROM staging. The lean image omits it
+;  (and dcshell hides its desktop icon when \Windows\iexplore.exe is absent).
+IF IMGHTML
+   iexplore.exe    $(_FLATRELEASEDIR)$(RELEASEDIR_OS)iexplore.exe    NK  SH
+ENDIF
    dcspi.dll       $(_FLATRELEASEDIR)$(RELEASEDIR_OS)dcspi.dll       NK  SH
    sdcard.dll      $(_FLATRELEASEDIR)$(RELEASEDIR_OS)sdcard.dll      NK  SH
    mmtimer.dll     $(_FLATRELEASEDIR)$(RELEASEDIR_OS)mmtimer.dll     NK  SH

@@ -8,6 +8,10 @@ toolchain/smoke/
 build.log
 build.err
 
+# user's \CD-ROM drop folder (default -DEXTRADATA): keep the placeholder, ignore dropped files
+extradata/*
+!extradata/put_your_files_here.txt
+
 # --- editor / OS cruft ---
 Thumbs.db
 *.user

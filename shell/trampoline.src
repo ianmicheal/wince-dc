@@ -1,0 +1,89 @@
+	.HEADING "DCWin chainloader trampoline (SH-4, scatter-gather)"
+;++
+;
+; trampoline.src - the DCWin chainloader inner loop. shasm, mirroring g2lock.src:
+; the MS SH compiler exposes no inline asm, so the privileged copy+jump lives here.
+;
+;   void Chainload(TrampParams *p);   ; p in r4 (its P2/uncached alias) ->
+;       { dst, nPages, entry, srMask, aPfnPg[8] }
+;
+; CE's VirtualAlloc hands back PHYSICALLY SCATTERED pages, so the payload can't be copied as one
+; linear run. Instead the caller builds a page-frame list: aPfnPg[k] is the P2 alias of a one-page
+; buffer holding up to 1024 raw physical page addresses. This routine walks page i = 0..nPages-1,
+; pulling source page i's physical address from aPfnPg[i>>10][i&1023], and copies its 4 KB to the
+; (contiguous) destination, which simply advances.
+;
+; EVERYTHING it touches is untranslated: the descriptor and the pfn pages via their P2 aliases (r4 /
+; aPfnPg[]), each source page via (phys & 0x1FFFFFFF)|0xA0000000, and the dest via its P2 alias. No
+; TLB is ever consulted, so SR.BL can be raised safely (srMask = BL|IMASK). The routine is copied
+; out of the NK region (which it overwrites) into a RAM-region buffer and run from THAT buffer's P2
+; alias, so it never clobbers itself. It never returns - it jumps to the new kernel's _StartUp, which
+; re-inits SR/VBR/cache/MMU from scratch.
+;
+; CONTRACT: privileged-only (stc/ldc SR need SR.MD=1); the caller wraps it in SetKMode(TRUE) and
+; CacheSyncs first so RAM holds the freshly-written payload/descriptor/pfn pages.
+;
+;--
+	.include "kxshx.h"
+
+;
+; Chainload - descriptor in r4: [0]=dst [4]=nPages [8]=entry [12]=srMask [16..]=aPfnPg[8]
+;
+	LEAF_ENTRY Chainload
+	ALTERNATE_ENTRY _Chainload
+	mov.l	@(12,r4), r0		; r0 = srMask (SR.BL | IMASK)
+	stc	SR, r1
+	or	r0, r1
+	ldc	r1, SR			; raise BL+IMASK (safe: every access below is untranslated)
+	mov.l	@(0,r4), r2		; r2 = dst base (P2), advances continuously
+	mov.l	@(4,r4), r3		; r3 = nPages (total source pages)
+	mov.l	@(8,r4), r6		; r6 = entry (new kernel _StartUp, P1)
+	mov	#0, r8			; r8 = page index i = 0
+PageTop:
+	mov	r8, r0
+	mov.l	cM3FF, r9
+	and	r9, r0			; r0 = i & 1023
+	tst	r0, r0
+	bf	NoReload		; mid-page: keep the current pfn pointer in r5
+	mov	r8, r0			; new 1024-page block -> reload r5 = aPfnPg[i>>10]
+	shlr2	r0
+	shlr8	r0			; r0 = i >> 10
+	shll2	r0			; r0 = (i>>10) * 4  (DWORD index into aPfnPg)
+	add	#16, r0			; + offset of aPfnPg[0] in the descriptor
+	mov	r4, r1
+	add	r0, r1			; r1 = &aPfnPg[k]  (P2)
+	mov.l	@r1, r5			; r5 = aPfnPg[k] -> P2 pointer into the pfn page
+NoReload:
+	mov.l	@r5+, r1		; r1 = source page physical addr (raw bytes), advance pfn ptr
+	mov.l	cMPHYS, r0
+	and	r0, r1
+	mov.l	cMP2, r0
+	or	r0, r1			; r1 = source page, P2 alias
+	mov.l	cMWORD, r7		; r7 = 1024 words per 4 KB page
+WordTop:
+	mov.l	@r1+, r0		; copy one word
+	mov.l	r0, @r2
+	add	#4, r2			; dest advances
+	dt	r7
+	bf	WordTop
+	add	#1, r8			; i++
+	cmp/hs	r3, r8			; T = (i >= nPages)
+	bf	PageTop			; more pages -> continue
+	jmp	@r6			; enter the new kernel
+	nop
+	.align	4
+cM3FF:	.data.l	H'000003FF
+cMPHYS:	.data.l	H'1FFFFFFF
+cMP2:	.data.l	H'A0000000
+cMWORD:	.data.l	H'00000400
+	ENTRY_END Chainload
+
+; Marker label so the C side can measure the trampoline's byte length (code + the literal pool
+; above), which it copies into an untranslated RAM buffer and runs from there - see BootIeImage.
+	LEAF_ENTRY ChainloadEnd
+	ALTERNATE_ENTRY _ChainloadEnd
+	rts
+	nop
+	ENTRY_END ChainloadEnd
+
+	.END

@@ -1,0 +1,13 @@
+Anything you drop into this folder is copied into the disc's \CD-ROM directory
+when you build the `gdi` / `gdi-full` target (this is the default -DEXTRADATA folder).
+
+Examples:
+  - a retail game's files (then boot it with -DAUTORUN=/CD-ROM/DC.EXE)
+  - wallpapers (\CD-ROM\Wallpaper\*.bmp - 24-bit BI_RGB, 640x480)
+  - music for the player (\CD-ROM\*.mp3 / *.wav)
+
+Notes:
+  - The build always overrides 0WINCEOS.BIN (the boot image) and 0WINCEOSHTML.BIN
+    (the chainloaded Internet Explorer image) with its freshly-built copies, so don't
+    bother putting those here.
+  - This placeholder file is harmless on the disc; delete it once you add your own files.

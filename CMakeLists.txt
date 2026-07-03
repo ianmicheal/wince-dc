@@ -133,10 +133,12 @@ add_sh_module(iexplore TYPE exe ENTRY WinMainCRTStartup OUT iexplore.exe
   LIBS coredll.lib corelibc.lib ole32.lib oleaut32.lib uuid.lib winsock.lib urlmon.lib
        ddraw.lib d3dim.lib dinput.lib dxguid.lib mapledev.lib psguid.lib wdm.lib)
 
-# ---- boot screen (autorun): D3D logo + live checklist, then launches dcshell -------
+# ---- boot loader (autorun): NT-style menu (Normal / Internet Explorer), then boots the choice ---
 add_sh_module(dcwboot TYPE exe ENTRY WinMainCRTStartup OUT dcwboot.exe
-  SOURCES ${REPO}/shell/dcwboot.c ${REPO}/shell/dcgfx.c ${REPO}/shell/dcboot.c
-  LIBS coredll.lib corelibc.lib ddraw.lib d3dim.lib dxguid.lib winsock.lib wdm.lib)
+  SOURCES ${REPO}/shell/dcwboot.c ${REPO}/shell/dcgfx.c ${REPO}/shell/dcinput.c
+  ASM     ${REPO}/shell/trampoline.src
+  LIBS coredll.lib corelibc.lib ddraw.lib d3dim.lib dinput.lib dxguid.lib mapledev.lib psguid.lib
+       winsock.lib wdm.lib)
 
 # ---- music player: WAV + MP3 (minimp3), DirectSound, spectrum viz, clickable UI ----
 # Built but NOT baked into the ROM (no platform.bib entry) - keep it compiling without bloating
@@ -165,9 +167,11 @@ add_sh_module(dcwplay TYPE exe ENTRY WinMainCRTStartup OUT dcwplay.exe
 # So a SCIF console over the working retail userland is `-DKERNEL=debug` (DLLS stays retail);
 # the checked DLLs are opt-in (they assert/break some titles, e.g. DDHAL under DirectDraw).
 set(KERNEL  "retail"       CACHE STRING "image kernel: retail (silent nknodbg) or debug (SCIF-console nkscifkd)")
+set(IEKERNEL "${KERNEL}"   CACHE STRING "IE/HTML image kernel: retail or debug (SCIF). Defaults to KERNEL; set debug for a SCIF console in the chainloaded IE image while testing the browser")
 set(DLLS    "retail"       CACHE STRING "system DLLs: retail (stock) or debug (checked overlay)")
-set(AUTORUN "dcshell.exe"  CACHE STRING "program baked into the image's HKLM\\init Autorun value")
-set_property(CACHE KERNEL PROPERTY STRINGS retail debug)
+set(AUTORUN "dcwboot.exe"  CACHE STRING "program baked into the image's HKLM\\init Autorun value (default dcwboot.exe = the NT-style boot menu that can chainload the IE image; use dcshell.exe to boot straight to the desktop)")
+set_property(CACHE KERNEL   PROPERTY STRINGS retail debug)
+set_property(CACHE IEKERNEL PROPERTY STRINGS retail debug)
 set_property(CACHE DLLS   PROPERTY STRINGS retail debug)
 
 if(KERNEL STREQUAL "debug")
@@ -175,12 +179,17 @@ if(KERNEL STREQUAL "debug")
 else()
   set(KERNEL_IMGFLAG "IMGNODEBUGGER=1")           # fmerge picks the silent nknodbg.exe
 endif()
+if(IEKERNEL STREQUAL "debug")
+  set(IEKERNEL_IMGFLAG "IMGSERIALDBG=1")
+else()
+  set(IEKERNEL_IMGFLAG "IMGNODEBUGGER=1")
+endif()
 if(DLLS STREQUAL "debug")
   set(IMG_DEBUG_DIR "${SDK}/image-debug")         # overlay checked coredll/gwes/microstk/...
 else()
   set(IMG_DEBUG_DIR "none")
 endif()
-message(STATUS "image: KERNEL=${KERNEL} DLLS=${DLLS} AUTORUN=${AUTORUN}")
+message(STATUS "image: KERNEL=${KERNEL} IEKERNEL=${IEKERNEL} DLLS=${DLLS} AUTORUN=${AUTORUN}")
 
 set(IMG_SEED ${SDK}/image)
 set(IMG_WORK ${CMAKE_BINARY_DIR}/image)
@@ -246,27 +255,69 @@ add_custom_command(OUTPUT ${WINCEOS}
 
 add_custom_target(image DEPENDS ${WINCEOS})
 
+# ---- second image: the IMGHTML (Trident/IE) ROM, built by default so the disc can chainload it ---
+# dcwboot's boot menu chainloads this 0WINCEOSHTML.BIN over the running kernel (the IE/Trident stack
+# bloats the ROM ~6 MB, too big to vendor in the lean main image). It's a full IMGHTML build with
+# iexplore.exe baked into ROM (platform.bib IF IMGHTML) and autorun = dcshell.exe (so it boots
+# straight to the desktop, where dcshell shows the IE icon). Same kernel/DLL knobs as the main image.
+# Toggle off (-DIEIMAGE=off) for a fast lean-only build with no browser.
+option(IEIMAGE "also build the IMGHTML/IE image (0winceoshtml.bin) for dcwboot to chainload" ON)
+if(IEIMAGE)
+  set(IMG_WORK_HTML ${CMAKE_BINARY_DIR}/image-html)
+  set(NKBIN_HTML    ${IMG_WORK_HTML}/NK.bin)
+  set(WINCEOSHTML   ${CMAKE_BINARY_DIR}/0winceoshtml.bin)
+  file(TO_NATIVE_PATH "${IMG_WORK_HTML}" IMG_WORK_HTML_NAT)
+  # Same env as the main image but pointed at the HTML work-dir + IMGHTML on.
+  set(IMG_ENV_HTML ${IMG_ENV})
+  list(REMOVE_ITEM IMG_ENV_HTML "_FLATRELEASEDIR=${IMG_WORK_NAT}")
+  list(APPEND IMG_ENV_HTML "_FLATRELEASEDIR=${IMG_WORK_HTML_NAT}" "IMGHTML=1")
+  # The IE image can run a different kernel than the main image (IEKERNEL) - e.g. main retail +
+  # IE SCIF for browser testing. Swap the kernel fmerge flag if they differ.
+  if(NOT IEKERNEL STREQUAL KERNEL)
+    list(REMOVE_ITEM IMG_ENV_HTML "${KERNEL_IMGFLAG}")
+    list(APPEND IMG_ENV_HTML "${IEKERNEL_IMGFLAG}")
+  endif()
+  # DEPENDS ${NKBIN} serialises the two makeimg runs (they share SDK tool temp state).
+  add_custom_command(OUTPUT ${NKBIN_HTML}
+    COMMAND ${CMAKE_COMMAND} -DSEED=${IMG_SEED} -DWORK=${IMG_WORK_HTML} -DDEBUG_DIR=${IMG_DEBUG_DIR}
+            -DAUTORUN=dcshell.exe -DMODS=${MODS_BAR} -P ${REPO}/cmake/prep-image.cmake
+    COMMAND ${CMAKE_COMMAND} -E env --modify "PATH=path_list_prepend:${SDK}/tools"
+            ${IMG_ENV_HTML} -- "${SDK}/tools/makeimg.exe"
+    WORKING_DIRECTORY ${IMG_WORK_HTML}
+    DEPENDS ${MODS} ${NKBIN} ${REPO}/cmake/prep-image.cmake VERBATIM
+    COMMENT "makeimg: building the IMGHTML/IE CE ROM (NK.bin)")
+  add_custom_command(OUTPUT ${WINCEOSHTML}
+    COMMAND powershell -NoProfile -ExecutionPolicy Bypass -File ${REPO}/toolchain/wrap-image.ps1
+            -NkBin ${NKBIN_HTML} -Out ${WINCEOSHTML} -DcSdk ${SDK}
+    DEPENDS ${NKBIN_HTML} VERBATIM
+    COMMENT "wrap-image: IE NK.bin -> 0winceoshtml.bin")
+  add_custom_target(ieimage DEPENDS ${WINCEOSHTML})
+  add_dependencies(ieimage iexplore)
+endif()
+
 # Build the bootable GDI (Half-Life DC pipeline: buildgdi + ip.bin) -> disc.gdi.
 #   -DEXTRADATA=<dir>  optional folder whose contents go into the disc's \CD-ROM
 #                      (e.g. a game's files; our 0winceos.bin always overrides 0WINCEOS.BIN).
-set(EXTRADATA "" CACHE STRING "optional folder whose contents go into the disc's \\CD-ROM (relative paths resolve against the repo root)")
-# \CD-ROM staging dir. We deliberately keep some apps OUT of the ROM (NK.bin) to keep the image
-# lean, and ship them on the disc instead: dcwplay.exe (self-contained media player) always, and
-# iexplore.exe only with -DHTML=on (it needs the IMGHTML DLL stack, which must stay in the ROM).
+set(EXTRADATA "extradata" CACHE STRING "folder whose contents go into the disc's \\CD-ROM (relative paths resolve against the repo root; default: the repo's extradata/ drop folder)")
+# \CD-ROM staging dir. We keep some files OUT of the lean ROM and ship them on the disc instead:
+# dcwplay.exe (the self-contained media player) always; the IMGHTML/IE image (0WINCEOSHTML.BIN) when
+# IEIMAGE is on, so dcwboot can chainload it; plus everything in the EXTRADATA drop folder. (iexplore
+# itself is NOT staged here - it lives in the IE image's ROM, since that image is chainloaded from an
+# arbitrary disc and can't rely on \CD-ROM.)
 set(CDROM ${CMAKE_BINARY_DIR}/cdrom)
 set(GDI_STAGE
   COMMAND ${CMAKE_COMMAND} -E rm -rf ${CDROM}
   COMMAND ${CMAKE_COMMAND} -E make_directory ${CDROM}
   COMMAND ${CMAKE_COMMAND} -E copy ${OUTDIR}/dcwplay.exe ${CDROM}/dcwplay.exe)
-if(HTML)
-  # The IE/Trident DLLs stay in the ROM (gemini.bib IMGHTML) - the \CD-ROM variant failed (wininet
-  # won't LoadLibrary from disc). Only the iexplore.exe launcher ships on the disc.
-  list(APPEND GDI_STAGE COMMAND ${CMAKE_COMMAND} -E copy ${OUTDIR}/iexplore.exe ${CDROM}/iexplore.exe)
+if(IEIMAGE)
+  list(APPEND GDI_STAGE COMMAND ${CMAKE_COMMAND} -E copy ${WINCEOSHTML} ${CDROM}/0WINCEOSHTML.BIN)
 endif()
 if(EXTRADATA)
   get_filename_component(EXTRADATA_ABS "${EXTRADATA}" ABSOLUTE BASE_DIR "${REPO}")
-  list(APPEND GDI_STAGE COMMAND ${CMAKE_COMMAND} -E copy_directory "${EXTRADATA_ABS}" ${CDROM})
-  message(STATUS "gdi: EXTRADATA=${EXTRADATA_ABS}")
+  if(EXISTS "${EXTRADATA_ABS}")
+    list(APPEND GDI_STAGE COMMAND ${CMAKE_COMMAND} -E copy_directory "${EXTRADATA_ABS}" ${CDROM})
+    message(STATUS "gdi: EXTRADATA=${EXTRADATA_ABS}")
+  endif()
 endif()
 add_custom_target(gdi
   ${GDI_STAGE}
@@ -276,8 +327,8 @@ add_custom_target(gdi
   COMMENT "make-gdi: 0winceos.bin (+ disc apps) -> disc.gdi"
   USES_TERMINAL)
 add_dependencies(gdi dcwplay)
-if(HTML)
-  add_dependencies(gdi iexplore)
+if(IEIMAGE)
+  add_dependencies(gdi ieimage)
 endif()
 
 # Same pipeline as `gdi` but with a FULL, contiguously-padded data track (-Full -> ~1.1 GB, no
@@ -290,6 +341,6 @@ add_custom_target(gdi-full
   COMMENT "make-gdi (FULL, no truncate): 0winceos.bin (+ disc apps) -> disc.gdi"
   USES_TERMINAL)
 add_dependencies(gdi-full dcwplay)
-if(HTML)
-  add_dependencies(gdi-full iexplore)
+if(IEIMAGE)
+  add_dependencies(gdi-full ieimage)
 endif()
