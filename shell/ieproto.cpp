@@ -401,11 +401,22 @@ extern "C" void IeRegisterWinsockProtocol(void)
 	IInternetSession *pSess = NULL;
 	if (CoInternetGetSession(0, &pSess, 0) == S_OK && pSess)
 	{
-		HRESULT hr = pSess->RegisterNameSpace(&g_dcwFactory, CLSID_DcwHttp, L"dcw", 0, NULL, 0);
+		// dcw:// = the main document scheme (fully ours, no WinInet fallback). ALSO claim http:// and
+		// https:// so the page's SUB-RESOURCE binds - images/CSS and especially the favicon Trident
+		// auto-fetches after every page - reach us too, instead of falling into the image's dead
+		// WinInet and hanging forever (the document then never reaches DocumentComplete, so the chrome
+		// stays stuck on "opening page..."). http:// we fetch over winsock; https:// FetchUrlA refuses
+		// (no TLS) -> a fast INET_E failure, so the resource is skipped and the page still completes.
+		// (Unlike the earlier failed experiment, the MAIN document is still navigated as dcw://, so
+		// this only intercepts resource binds - it doesn't route the document load through http.)
+		HRESULT hrD = pSess->RegisterNameSpace(&g_dcwFactory, CLSID_DcwHttp, L"dcw", 0, NULL, 0);
+		HRESULT hrH = pSess->RegisterNameSpace(&g_dcwFactory, CLSID_DcwHttp, L"http", 0, NULL, 0);
+		HRESULT hrS = pSess->RegisterNameSpace(&g_dcwFactory, CLSID_DcwHttp, L"https", 0, NULL, 0);
 		pSess->Release();
 		{
-			WCHAR b[64];
-			wsprintfW(b, L"IE: register http handler hr=%08x\r\n", (unsigned)hr);
+			WCHAR b[96];
+			wsprintfW(b, L"IE: register handlers dcw=%08x http=%08x https=%08x\r\n", (unsigned)hrD,
+			          (unsigned)hrH, (unsigned)hrS);
 			OutputDebugStringW(b);
 		}
 	}

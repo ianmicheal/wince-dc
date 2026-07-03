@@ -47,9 +47,18 @@ IF IMGTCIME
 ENDIF
 IF IMGPIME !
 IF IMGTCIME !
+IF IMGHTML
+   ;  IE image: Trident/urlmon needs a writable RAM object store for its download cache. Without it
+   ;  the document-load phase (after our winsock IInternetProtocol delivers the bytes) hangs trying
+   ;  to spill the download to a cache temp on the otherwise read-only FS -> the page downloads but
+   ;  never renders (the chrome stays on "opening page..."). ~12.5% of RAM (~1.2 MB) is plenty.
+    FSRAMPERCENT=0x10101011
+ENDIF
+IF IMGHTML !
    ;  DCWin: no RAM object store -> all RAM to programs (matches real game discs,
    ;  whose 0WINCEOS.BIN ship FSRamPercent=0; needed for big 3D titles' buffers).
     FSRAMPERCENT=0x00000000
+ENDIF
 ENDIF
 ENDIF
 ENDIF
